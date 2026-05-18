@@ -1,0 +1,31 @@
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos temporales / locales
+*.tmp
+*.log
+*.bak
+~$*
+
+# Excel de planificación (datos sensibles — no subir al repo público)
+*.xlsx
+*.xlsm
+*.xls
+*.xlsb
+
+# Snapshots JSON exportados del portal
+portal-snapshot-*.json
+
+# Dependencias (por si en el futuro se agregan)
+node_modules/
+.vercel/
+.env
+.env.local

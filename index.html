@@ -12044,7 +12044,6 @@ async function loadSnapshot() {
     const rows = await r.json();
     if (!rows.length) return null;
     const data = rows[0].data || {};
-    // Si Supabase está vacío (solo {} sin estructura), tratamos como "no hay snapshot"
     if (!data || !data.planificacion_diaria) return null;
     return data;
   } catch (e) {
@@ -12126,7 +12125,6 @@ async function onSignInClick() {
   }
   try {
     await supabaseSignIn(email, password);
-    // Recargar snapshot tras login (por si hay datos nuevos del servidor)
     const saved = await loadSnapshot();
     if (saved) {
       STATE = saved;
@@ -13344,4 +13342,146 @@ function actualizarMaestro(wb) {
 // EXPORT / RESET / ELIMINAR
 // =========================================================
 function exportSnapshot() {
-  const blob = new B
+  const blob = new Blob([JSON.stringify(STATE, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `portal-snapshot-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function borrarDatos() {
+  if (!confirm('¿Borrar todos los datos cargados? Esta acción no se puede deshacer.')) return;
+  await clearSnapshot();
+  STATE = cargarDataInicial();
+  await saveSnapshot(STATE);
+  rellenarFechaSelect(STATE);
+  renderAll();
+  logUpload('Datos borrados. Se restauró la data inicial embebida.', 'success');
+}
+
+const TIPO_LABELS = {
+  rosen_v: 'Rosen V Región',
+  rosen_iv: 'Rosen IV (Coquimbo)',
+  canon_rm_vehiculos: 'Canon RM — resumen vehículos',
+  canon_rm_detalle: 'Canon RM — detalle guías',
+  canon_v_vehiculos: 'Canon V — resumen vehículos',
+  canon_v_detalle: 'Canon V — detalle guías'
+};
+
+function getCargasResumen(state) {
+  const out = [];
+  Object.keys(TIPO_LABELS).forEach(tipo => {
+    const arr = state.planificacion_diaria[tipo] || [];
+    const byDate = {};
+    arr.forEach(r => { const f = r.fecha || '(sin fecha)'; byDate[f] = (byDate[f] || 0) + 1; });
+    Object.entries(byDate).forEach(([fecha, count]) => {
+      out.push({ tipo, label: TIPO_LABELS[tipo], fecha, count });
+    });
+  });
+  return out;
+}
+
+async function eliminarCarga(tipo, fecha) {
+  if (!confirm(`¿Eliminar la carga de "${TIPO_LABELS[tipo] || tipo}" con fecha ${fecha}?\n\nEsto no afecta las demás cargas.`)) return;
+  STATE.planificacion_diaria[tipo] = (STATE.planificacion_diaria[tipo] || []).filter(r => r.fecha !== fecha);
+  await saveSnapshot(STATE);
+  rellenarFechaSelect(STATE);
+  renderAll();
+  logUpload(`OK Eliminada carga: ${TIPO_LABELS[tipo]} / ${fecha}`, 'success');
+}
+
+async function eliminarFechaCompleta(fecha) {
+  if (!confirm(`¿Eliminar TODAS las cargas con fecha ${fecha}? (Rosen + Canon)\n\nEsto elimina todos los registros de ese día en todas las operaciones.`)) return;
+  let total = 0;
+  Object.keys(STATE.planificacion_diaria).forEach(k => {
+    const arr = STATE.planificacion_diaria[k] || [];
+    const antes = arr.length;
+    STATE.planificacion_diaria[k] = arr.filter(r => r.fecha !== fecha);
+    total += antes - STATE.planificacion_diaria[k].length;
+  });
+  await saveSnapshot(STATE);
+  rellenarFechaSelect(STATE);
+  renderAll();
+  logUpload(`OK Eliminados ${total} registros de la fecha ${fecha}`, 'success');
+}
+
+function renderCargas() {
+  const tbody = document.querySelector('#tablaCargas tbody');
+  if (!tbody) return;
+  const cargas = getCargasResumen(STATE);
+  if (!cargas.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">Sin cargas guardadas. Arrastra archivos para empezar.</td></tr>';
+    return;
+  }
+  const fechas = Array.from(new Set(cargas.map(c => c.fecha))).sort().reverse();
+  tbody.innerHTML = '';
+  fechas.forEach(fecha => {
+    const items = cargas.filter(c => c.fecha === fecha);
+    items.forEach((c, i) => {
+      const opTag = c.tipo.startsWith('canon') ? 'tag-canon' : 'tag-rosen';
+      const opName = c.tipo.startsWith('canon') ? 'Canon' : 'Rosen';
+      const primero = i === 0 ? `<td rowspan="${items.length}" style="vertical-align:top;border-right:1px solid var(--border)"><strong>${fecha}</strong><br><button class="btn btn-danger" style="font-size:0.75rem;padding:0.3rem 0.6rem;margin-top:0.4rem" onclick="eliminarFechaCompleta('${fecha}')">Eliminar fecha completa</button></td>` : '';
+      tbody.insertAdjacentHTML('beforeend', `<tr>${primero}<td><span class="tag ${opTag}">${opName}</span> ${c.label}</td><td>${fmt(c.count, 0)}</td><td><button class="btn btn-secondary" style="font-size:0.75rem;padding:0.3rem 0.6rem;white-space:nowrap" onclick="eliminarCarga('${c.tipo}', '${fecha}')">Eliminar</button></td></tr>`);
+    });
+  });
+}
+
+// =========================================================
+// INIT
+// =========================================================
+function cargarDataInicial() {
+  const txt = document.getElementById('initialData').textContent;
+  try { return JSON.parse(txt); }
+  catch (e) { console.error('Error parseando data inicial', e); return STATE; }
+}
+
+async function init() {
+  // Restaurar sesión guardada (si la hay) y pintar panel de login/logout
+  loadSavedSession();
+  updateAuthUI();
+  try {
+    const saved = await loadSnapshot();
+    STATE = saved || cargarDataInicial();
+    // Migrar estructura antigua si falta canon_v_*
+    if (!STATE.planificacion_diaria.canon_v_vehiculos) STATE.planificacion_diaria.canon_v_vehiculos = [];
+    if (!STATE.planificacion_diaria.canon_v_detalle) STATE.planificacion_diaria.canon_v_detalle = [];
+  } catch (e) {
+    console.error('Error cargando snapshot', e);
+    STATE = cargarDataInicial();
+  }
+  rellenarFechaSelect(STATE);
+  renderAll();
+
+  const dz = document.getElementById('dropZone');
+  if (dz) {
+    ['dragenter', 'dragover'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('drag-over'); }));
+    ['dragleave', 'drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('drag-over'); }));
+    dz.addEventListener('drop', async ev => {
+      const files = Array.from(ev.dataTransfer.files);
+      for (const f of files) await procesarArchivo(f);
+    });
+  }
+  const fi = document.getElementById('fileInput');
+  if (fi) {
+    fi.addEventListener('change', async ev => {
+      for (const f of Array.from(ev.target.files)) await procesarArchivo(f);
+      ev.target.value = '';
+    });
+  }
+
+  ['dragenter', 'dragover', 'drop'].forEach(e => {
+    window.addEventListener(e, ev => { if (ev.target && ev.target.id !== 'dropZone') ev.preventDefault(); });
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
+</script>
+</body>
+</html>

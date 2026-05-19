@@ -605,10 +605,11 @@ footer {
 
 <!-- CARGAR -->
 <section id="sec-cargar" class="section">
+  <div id="authPanel" style="margin-bottom:1rem"></div>
   <div class="drop-zone" id="dropZone">
     <h3>Arrastra aquí tus Excel de planificación</h3>
     <p>Acepta los archivos diarios de Canon (RM) y Rosen (V Región, IV Coquimbo).<br>
-    Los datos se guardan automáticamente en este navegador y persisten al cerrar.</p>
+    Los datos se sincronizan al servidor central y todo el equipo los ve actualizados.</p>
     <input type="file" id="fileInput" multiple accept=".xlsx,.xls">
     <button class="btn" onclick="document.getElementById('fileInput').click()">Seleccionar archivos</button>
   </div>
@@ -655,7 +656,7 @@ footer {
 </main>
 
 <footer>
-  Portal de Planificación · Datos persistidos localmente en este navegador (IndexedDB) ·
+  Portal de Planificación · Datos sincronizados en servidor central (Supabase) ·
   <a href="#" onclick="exportSnapshot();return false;" style="color:var(--primary)">Exportar snapshot</a>
 </footer>
 
@@ -11970,46 +11971,178 @@ function getCanonDetalle(state) {
 const CHARTS = {};
 
 // =========================================================
-// PERSISTENCIA — IndexedDB
+// PERSISTENCIA — Supabase (sincronización global)
 // =========================================================
-function openDB() {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(DB_STORE)) {
-        db.createObjectStore(DB_STORE);
-      }
-    };
-    req.onsuccess = (e) => res(e.target.result);
-    req.onerror = (e) => rej(e.target.error);
-  });
+const SUPABASE_URL = 'https://uxyxdfbmfviofwdxmqsq.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_SI6kt_9ioxvIg3VaZOqXdA_zrIry6pR';
+const SESSION_LS_KEY = 'portal.supabase.session';
+
+let SUPABASE_SESSION = null;
+
+function loadSavedSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_LS_KEY);
+    if (raw) SUPABASE_SESSION = JSON.parse(raw);
+  } catch (e) { SUPABASE_SESSION = null; }
 }
-async function saveSnapshot(data) {
-  const db = await openDB();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(DB_STORE, 'readwrite');
-    tx.objectStore(DB_STORE).put(data, DB_KEY);
-    tx.oncomplete = () => res();
-    tx.onerror = (e) => rej(e.target.error);
-  });
+function persistSession() {
+  if (SUPABASE_SESSION) localStorage.setItem(SESSION_LS_KEY, JSON.stringify(SUPABASE_SESSION));
+  else localStorage.removeItem(SESSION_LS_KEY);
 }
+function isAuthenticated() {
+  return !!(SUPABASE_SESSION && SUPABASE_SESSION.access_token);
+}
+function getCurrentUserEmail() {
+  return (SUPABASE_SESSION && SUPABASE_SESSION.user && SUPABASE_SESSION.user.email) || '';
+}
+function supabaseHeaders(useUserToken = false) {
+  const token = (useUserToken && isAuthenticated()) ? SUPABASE_SESSION.access_token : SUPABASE_KEY;
+  return {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  };
+}
+
+async function supabaseSignIn(email, password) {
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error_description || data.msg || data.error || 'Credenciales inválidas');
+  SUPABASE_SESSION = data;
+  persistSession();
+  updateAuthUI();
+  return data;
+}
+
+async function supabaseSignOut() {
+  if (isAuthenticated()) {
+    try {
+      await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+        method: 'POST',
+        headers: supabaseHeaders(true)
+      });
+    } catch (e) { /* ignorar */ }
+  }
+  SUPABASE_SESSION = null;
+  persistSession();
+  updateAuthUI();
+}
+
 async function loadSnapshot() {
-  const db = await openDB();
-  return new Promise((res) => {
-    const tx = db.transaction(DB_STORE, 'readonly');
-    const req = tx.objectStore(DB_STORE).get(DB_KEY);
-    req.onsuccess = () => res(req.result || null);
-    req.onerror = () => res(null);
-  });
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/portal_snapshot?id=eq.1&select=data,updated_at`, {
+      headers: supabaseHeaders(false)
+    });
+    if (!r.ok) {
+      console.error('loadSnapshot HTTP', r.status, await r.text());
+      return null;
+    }
+    const rows = await r.json();
+    if (!rows.length) return null;
+    const data = rows[0].data || {};
+    // Si Supabase está vacío (solo {} sin estructura), tratamos como "no hay snapshot"
+    if (!data || !data.planificacion_diaria) return null;
+    return data;
+  } catch (e) {
+    console.error('loadSnapshot error', e);
+    return null;
+  }
 }
-async function clearSnapshot() {
-  const db = await openDB();
-  return new Promise((res) => {
-    const tx = db.transaction(DB_STORE, 'readwrite');
-    tx.objectStore(DB_STORE).delete(DB_KEY);
-    tx.oncomplete = () => res();
+
+async function saveSnapshot(data) {
+  if (!isAuthenticated()) {
+    throw new Error('Necesitas iniciar sesión para guardar cambios.');
+  }
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/portal_snapshot?id=eq.1`, {
+    method: 'PATCH',
+    headers: { ...supabaseHeaders(true), 'Prefer': 'return=minimal' },
+    body: JSON.stringify({ data: data, updated_by: getCurrentUserEmail() })
   });
+  if (!r.ok) {
+    const errText = await r.text();
+    if (r.status === 401 || r.status === 403) {
+      SUPABASE_SESSION = null;
+      persistSession();
+      updateAuthUI();
+      throw new Error('Tu sesión expiró. Vuelve a iniciar sesión y reintenta.');
+    }
+    throw new Error(`Error al guardar (HTTP ${r.status}): ${errText}`);
+  }
+}
+
+async function clearSnapshot() {
+  if (!isAuthenticated()) {
+    throw new Error('Necesitas iniciar sesión para borrar datos.');
+  }
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/portal_snapshot?id=eq.1`, {
+    method: 'PATCH',
+    headers: { ...supabaseHeaders(true), 'Prefer': 'return=minimal' },
+    body: JSON.stringify({ data: {}, updated_by: getCurrentUserEmail() })
+  });
+  if (!r.ok) {
+    const errText = await r.text();
+    throw new Error(`Error al borrar (HTTP ${r.status}): ${errText}`);
+  }
+}
+
+function updateAuthUI() {
+  const panel = document.getElementById('authPanel');
+  const dz = document.getElementById('dropZone');
+  if (!panel) return;
+  if (isAuthenticated()) {
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.8rem;flex-wrap:wrap;background:#e8f5e9;border:1px solid #4caf50;padding:0.8rem 1rem;border-radius:8px">
+        <span><strong>Sesión activa:</strong> ${getCurrentUserEmail()} · ya puedes cargar archivos</span>
+        <button class="btn btn-secondary" onclick="onSignOutClick()" style="font-size:0.85rem">Cerrar sesión</button>
+      </div>`;
+    if (dz) { dz.style.opacity = '1'; dz.style.pointerEvents = 'auto'; }
+  } else {
+    panel.innerHTML = `
+      <div style="background:#fff3e0;border:1px solid #ff9800;padding:1rem;border-radius:8px">
+        <div style="font-weight:600;margin-bottom:0.5rem">🔒 Inicia sesión para cargar archivos</div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+          <input id="authEmail" type="email" placeholder="email" style="padding:0.5rem;border:1px solid var(--border);border-radius:4px;flex:1;min-width:160px" onkeydown="if(event.key==='Enter') onSignInClick()">
+          <input id="authPassword" type="password" placeholder="contraseña" style="padding:0.5rem;border:1px solid var(--border);border-radius:4px;flex:1;min-width:140px" onkeydown="if(event.key==='Enter') onSignInClick()">
+          <button class="btn" onclick="onSignInClick()" style="font-size:0.85rem">Iniciar sesión</button>
+        </div>
+        <div id="authError" style="color:#c62828;margin-top:0.5rem;font-size:0.85rem;display:none"></div>
+        <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.5rem">Solo el administrador puede cargar archivos. El resto del equipo solo ve los datos sincronizados.</div>
+      </div>`;
+    if (dz) { dz.style.opacity = '0.5'; dz.style.pointerEvents = 'none'; }
+  }
+}
+
+async function onSignInClick() {
+  const email = (document.getElementById('authEmail') || {}).value;
+  const password = (document.getElementById('authPassword') || {}).value;
+  const errEl = document.getElementById('authError');
+  if (!email || !password) {
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Ingresa email y contraseña.'; }
+    return;
+  }
+  try {
+    await supabaseSignIn(email, password);
+    // Recargar snapshot tras login (por si hay datos nuevos del servidor)
+    const saved = await loadSnapshot();
+    if (saved) {
+      STATE = saved;
+      if (!STATE.planificacion_diaria.canon_v_vehiculos) STATE.planificacion_diaria.canon_v_vehiculos = [];
+      if (!STATE.planificacion_diaria.canon_v_detalle) STATE.planificacion_diaria.canon_v_detalle = [];
+      rellenarFechaSelect(STATE);
+      renderAll();
+    }
+  } catch (e) {
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = e.message; }
+  }
+}
+
+async function onSignOutClick() {
+  if (!confirm('¿Cerrar sesión? Ya no podrás cargar archivos hasta volver a iniciar sesión.')) return;
+  await supabaseSignOut();
 }
 
 // =========================================================
@@ -13211,143 +13344,4 @@ function actualizarMaestro(wb) {
 // EXPORT / RESET / ELIMINAR
 // =========================================================
 function exportSnapshot() {
-  const blob = new Blob([JSON.stringify(STATE, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `portal-snapshot-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-async function borrarDatos() {
-  if (!confirm('¿Borrar todos los datos cargados? Esta acción no se puede deshacer.')) return;
-  await clearSnapshot();
-  STATE = cargarDataInicial();
-  await saveSnapshot(STATE);
-  rellenarFechaSelect(STATE);
-  renderAll();
-  logUpload('Datos borrados. Se restauró la data inicial embebida.', 'success');
-}
-
-const TIPO_LABELS = {
-  rosen_v: 'Rosen V Región',
-  rosen_iv: 'Rosen IV (Coquimbo)',
-  canon_rm_vehiculos: 'Canon RM — resumen vehículos',
-  canon_rm_detalle: 'Canon RM — detalle guías',
-  canon_v_vehiculos: 'Canon V — resumen vehículos',
-  canon_v_detalle: 'Canon V — detalle guías'
-};
-
-function getCargasResumen(state) {
-  const out = [];
-  Object.keys(TIPO_LABELS).forEach(tipo => {
-    const arr = state.planificacion_diaria[tipo] || [];
-    const byDate = {};
-    arr.forEach(r => { const f = r.fecha || '(sin fecha)'; byDate[f] = (byDate[f] || 0) + 1; });
-    Object.entries(byDate).forEach(([fecha, count]) => {
-      out.push({ tipo, label: TIPO_LABELS[tipo], fecha, count });
-    });
-  });
-  return out;
-}
-
-async function eliminarCarga(tipo, fecha) {
-  if (!confirm(`¿Eliminar la carga de "${TIPO_LABELS[tipo] || tipo}" con fecha ${fecha}?\n\nEsto no afecta las demás cargas.`)) return;
-  STATE.planificacion_diaria[tipo] = (STATE.planificacion_diaria[tipo] || []).filter(r => r.fecha !== fecha);
-  await saveSnapshot(STATE);
-  rellenarFechaSelect(STATE);
-  renderAll();
-  logUpload(`OK Eliminada carga: ${TIPO_LABELS[tipo]} / ${fecha}`, 'success');
-}
-
-async function eliminarFechaCompleta(fecha) {
-  if (!confirm(`¿Eliminar TODAS las cargas con fecha ${fecha}? (Rosen + Canon)\n\nEsto elimina todos los registros de ese día en todas las operaciones.`)) return;
-  let total = 0;
-  Object.keys(STATE.planificacion_diaria).forEach(k => {
-    const arr = STATE.planificacion_diaria[k] || [];
-    const antes = arr.length;
-    STATE.planificacion_diaria[k] = arr.filter(r => r.fecha !== fecha);
-    total += antes - STATE.planificacion_diaria[k].length;
-  });
-  await saveSnapshot(STATE);
-  rellenarFechaSelect(STATE);
-  renderAll();
-  logUpload(`OK Eliminados ${total} registros de la fecha ${fecha}`, 'success');
-}
-
-function renderCargas() {
-  const tbody = document.querySelector('#tablaCargas tbody');
-  if (!tbody) return;
-  const cargas = getCargasResumen(STATE);
-  if (!cargas.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty">Sin cargas guardadas. Arrastra archivos para empezar.</td></tr>';
-    return;
-  }
-  const fechas = Array.from(new Set(cargas.map(c => c.fecha))).sort().reverse();
-  tbody.innerHTML = '';
-  fechas.forEach(fecha => {
-    const items = cargas.filter(c => c.fecha === fecha);
-    items.forEach((c, i) => {
-      const opTag = c.tipo.startsWith('canon') ? 'tag-canon' : 'tag-rosen';
-      const opName = c.tipo.startsWith('canon') ? 'Canon' : 'Rosen';
-      const primero = i === 0 ? `<td rowspan="${items.length}" style="vertical-align:top;border-right:1px solid var(--border)"><strong>${fecha}</strong><br><button class="btn btn-danger" style="font-size:0.75rem;padding:0.3rem 0.6rem;margin-top:0.4rem" onclick="eliminarFechaCompleta('${fecha}')">Eliminar fecha completa</button></td>` : '';
-      tbody.insertAdjacentHTML('beforeend', `<tr>${primero}<td><span class="tag ${opTag}">${opName}</span> ${c.label}</td><td>${fmt(c.count, 0)}</td><td><button class="btn btn-secondary" style="font-size:0.75rem;padding:0.3rem 0.6rem;white-space:nowrap" onclick="eliminarCarga('${c.tipo}', '${fecha}')">Eliminar</button></td></tr>`);
-    });
-  });
-}
-
-// =========================================================
-// INIT
-// =========================================================
-function cargarDataInicial() {
-  const txt = document.getElementById('initialData').textContent;
-  try { return JSON.parse(txt); }
-  catch (e) { console.error('Error parseando data inicial', e); return STATE; }
-}
-
-async function init() {
-  try {
-    const saved = await loadSnapshot();
-    STATE = saved || cargarDataInicial();
-    // Migrar estructura antigua si falta canon_v_*
-    if (!STATE.planificacion_diaria.canon_v_vehiculos) STATE.planificacion_diaria.canon_v_vehiculos = [];
-    if (!STATE.planificacion_diaria.canon_v_detalle) STATE.planificacion_diaria.canon_v_detalle = [];
-  } catch (e) {
-    console.error('Error cargando snapshot', e);
-    STATE = cargarDataInicial();
-  }
-  rellenarFechaSelect(STATE);
-  renderAll();
-
-  const dz = document.getElementById('dropZone');
-  if (dz) {
-    ['dragenter', 'dragover'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('drag-over'); }));
-    ['dragleave', 'drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('drag-over'); }));
-    dz.addEventListener('drop', async ev => {
-      const files = Array.from(ev.dataTransfer.files);
-      for (const f of files) await procesarArchivo(f);
-    });
-  }
-  const fi = document.getElementById('fileInput');
-  if (fi) {
-    fi.addEventListener('change', async ev => {
-      for (const f of Array.from(ev.target.files)) await procesarArchivo(f);
-      ev.target.value = '';
-    });
-  }
-
-  ['dragenter', 'dragover', 'drop'].forEach(e => {
-    window.addEventListener(e, ev => { if (ev.target && ev.target.id !== 'dropZone') ev.preventDefault(); });
-  });
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
-
-</script>
-</body>
-</html>
+  const blob = new B

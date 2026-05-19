@@ -606,6 +606,7 @@ footer {
 <!-- CARGAR -->
 <section id="sec-cargar" class="section">
   <div id="authPanel" style="margin-bottom:1rem"></div>
+  <div id="adminTools" style="display:none">
   <div class="drop-zone" id="dropZone">
     <h3>Arrastra aquí tus Excel de planificación</h3>
     <p>Acepta los archivos diarios de Canon (RM) y Rosen (V Región, IV Coquimbo).<br>
@@ -651,6 +652,7 @@ footer {
   </div>
   <div class="table-title" style="background:var(--card);border:1px solid var(--border);border-radius:8px 8px 0 0;padding:1rem 1.5rem">Registro de carga</div>
   <div class="upload-log" id="uploadLog" style="border-radius:0 0 8px 8px;border-top:none">Listo. Arrastra archivos para procesarlos…</div>
+  </div>
 </section>
 
 </main>
@@ -12098,7 +12100,8 @@ function updateAuthUI() {
         <span><strong>Sesión activa:</strong> ${getCurrentUserEmail()} · ya puedes cargar archivos</span>
         <button class="btn btn-secondary" onclick="onSignOutClick()" style="font-size:0.85rem">Cerrar sesión</button>
       </div>`;
-    if (dz) { dz.style.opacity = '1'; dz.style.pointerEvents = 'auto'; }
+    const admin = document.getElementById('adminTools');
+    if (admin) admin.style.display = '';
   } else {
     panel.innerHTML = `
       <div style="background:#fff3e0;border:1px solid #ff9800;padding:1rem;border-radius:8px">
@@ -12111,7 +12114,8 @@ function updateAuthUI() {
         <div id="authError" style="color:#c62828;margin-top:0.5rem;font-size:0.85rem;display:none"></div>
         <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.5rem">Solo el administrador puede cargar archivos. El resto del equipo solo ve los datos sincronizados.</div>
       </div>`;
-    if (dz) { dz.style.opacity = '0.5'; dz.style.pointerEvents = 'none'; }
+    const admin = document.getElementById('adminTools');
+    if (admin) admin.style.display = 'none';
   }
 }
 

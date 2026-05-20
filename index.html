@@ -6,42 +6,51 @@
 <title>Portal de Planificación - Canon & Rosen</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #0f172a;
-  --bg-2: #1e293b;
-  --card: #1e293b;
-  --card-2: #243149;
-  --border: #334155;
-  --text: #f1f5f9;
-  --text-dim: #94a3b8;
-  --primary: #3b82f6;
-  --canon: #f59e0b;
-  --rosen: #10b981;
-  --danger: #ef4444;
-  --warning: #f97316;
-  --success: #22c55e;
+  /* Paleta corporativa bigticket */
+  --bg: #F4F3F3;        /* hueso, fondo principal */
+  --bg-2: #FFFFFF;      /* blanco, áreas de navegación / filtros */
+  --card: #FFFFFF;      /* tarjetas */
+  --card-2: #F4F3F3;    /* tarjetas secundarias / encabezados de tabla */
+  --border: #E0E0E0;    /* bordes grises claros */
+  --text: #1A1A1A;      /* casi negro */
+  --text-dim: #545454;  /* gris oficial BT */
+  --primary: #002E5D;   /* azul corporativo BT */
+  --primary-dark: #001F40;
+  --accent: #FF6600;    /* naranja corporativo BT */
+  --canon: #FF6600;     /* Canon en naranja BT */
+  --rosen: #1E88E5;     /* Rosen en azul más claro para diferenciar de primary */
+  --danger: #C62828;    /* rojo sobrio */
+  --warning: #FF6600;   /* warning usa naranja BT */
+  --success: #2E7D32;   /* verde sobrio */
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
   min-height: 100vh;
 }
 header {
-  background: linear-gradient(135deg, #1e3a8a 0%, #1e293b 100%);
-  padding: 1.5rem 2rem;
-  border-bottom: 2px solid var(--border);
+  background: #FFFFFF;
+  padding: 1rem 2rem;
+  border-bottom: 3px solid var(--primary);
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   gap: 1rem;
 }
-header h1 { font-size: 1.5rem; font-weight: 700; }
-header .subtitle { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.25rem; }
+header .brand { display: flex; align-items: center; gap: 1.25rem; }
+header .brand img { height: 64px; width: auto; display: block; }
+header .brand .title-block { border-left: 2px solid var(--border); padding-left: 1.25rem; }
+header h1 { font-size: 1.4rem; font-weight: 700; color: var(--primary); }
+header .subtitle { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.2rem; }
 header .actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
 .btn {
   background: var(--primary);
@@ -54,11 +63,13 @@ header .actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: w
   font-weight: 500;
   transition: all 0.2s;
 }
-.btn:hover { background: #2563eb; transform: translateY(-1px); }
-.btn-secondary { background: var(--card-2); }
-.btn-secondary:hover { background: #2d3a55; }
+.btn:hover { background: var(--primary-dark); transform: translateY(-1px); }
+.btn-secondary { background: var(--card-2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: #E8E7E7; border-color: var(--primary); }
 .btn-danger { background: var(--danger); }
-.btn-danger:hover { background: #dc2626; }
+.btn-danger:hover { background: #B71C1C; }
+.btn-accent { background: var(--accent); }
+.btn-accent:hover { background: #E55A00; }
 
 nav.tabs {
   background: var(--bg-2);
@@ -224,7 +235,7 @@ td {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
 }
-tr:hover td { background: rgba(59, 130, 246, 0.05); }
+tr:hover td { background: rgba(0, 46, 93, 0.04); }
 .tag {
   display: inline-block;
   padding: 0.2rem 0.6rem;
@@ -232,11 +243,11 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
   font-size: 0.75rem;
   font-weight: 500;
 }
-.tag-canon { background: rgba(245, 158, 11, 0.2); color: var(--canon); }
-.tag-rosen { background: rgba(16, 185, 129, 0.2); color: var(--rosen); }
-.tag-rm { background: rgba(59, 130, 246, 0.2); color: var(--primary); }
-.tag-v { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
-.tag-iv { background: rgba(236, 72, 153, 0.2); color: #f472b6; }
+.tag-canon { background: rgba(255, 102, 0, 0.15); color: var(--canon); border: 1px solid rgba(255, 102, 0, 0.3); }
+.tag-rosen { background: rgba(30, 136, 229, 0.12); color: var(--rosen); border: 1px solid rgba(30, 136, 229, 0.3); }
+.tag-rm { background: rgba(0, 46, 93, 0.12); color: var(--primary); border: 1px solid rgba(0, 46, 93, 0.3); }
+.tag-v { background: rgba(84, 84, 84, 0.12); color: var(--text-dim); border: 1px solid rgba(84, 84, 84, 0.3); }
+.tag-iv { background: rgba(198, 40, 40, 0.10); color: var(--danger); border: 1px solid rgba(198, 40, 40, 0.3); }
 
 .progress-bar {
   height: 8px;
@@ -265,7 +276,7 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 }
 .drop-zone.drag-over {
   border-color: var(--primary);
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(0, 46, 93, 0.05);
 }
 .drop-zone h3 { margin-bottom: 0.5rem; }
 .drop-zone p { color: var(--text-dim); margin-bottom: 1rem; }
@@ -286,10 +297,11 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 .log-info { color: var(--text-dim); }
 
 footer {
-  padding: 2rem;
+  padding: 1.5rem 2rem;
   text-align: center;
   color: var(--text-dim);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  background: #FFFFFF;
   border-top: 1px solid var(--border);
   margin-top: 3rem;
 }
@@ -391,9 +403,12 @@ footer {
 <body>
 
 <header>
-  <div>
-    <h1>Portal de Planificación Operacional</h1>
-    <div class="subtitle">Canon (RM, V Región) · Rosen (V Región, IV Coquimbo)</div>
+  <div class="brand">
+    <img src="logo_bigticket_fondoclaro.png" alt="bigticket logística y transporte" onerror="this.style.display='none'">
+    <div class="title-block">
+      <h1>Portal de Planificación Operacional</h1>
+      <div class="subtitle">Canon (RM, V Región) · Rosen (V Región, IV Coquimbo)</div>
+    </div>
   </div>
   <div class="actions">
     <span id="dataInfo" class="subtitle"></span>
@@ -12699,8 +12714,10 @@ function destroyChart(id) {
 }
 
 const COLORS_NODO = {
-  'C_RM': '#3b82f6', 'C_VIÑA': '#f59e0b',
-  'R_VIÑA': '#10b981', 'R_SERENA': '#ec4899'
+  'C_RM': '#002E5D',     // Azul BT
+  'C_VIÑA': '#FF6600',   // Naranja BT
+  'R_VIÑA': '#1E88E5',   // Azul claro
+  'R_SERENA': '#6A1B9A'  // Violeta diferenciador
 };
 
 function renderChartsResumen(state, filtros) {
@@ -12776,7 +12793,7 @@ function renderChartsResumen(state, filtros) {
   destroyChart('chartCvR');
   CHARTS.chartCvR = new Chart(document.getElementById('chartCvR'), {
     type: 'doughnut',
-    data: { labels: ['Canon', 'Rosen'], datasets: [{ data: [opMt3.Canon, opMt3.Rosen], backgroundColor: ['#f59e0b', '#10b981'] }] },
+    data: { labels: ['Canon', 'Rosen'], datasets: [{ data: [opMt3.Canon, opMt3.Rosen], backgroundColor: ['#FF6600', '#1E88E5'] }] },
     options: chartOpts({ legend: true })
   });
 }
@@ -12786,7 +12803,7 @@ function chartOpts(opts = {}) {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { display: opts.legend !== false, labels: { color: '#f1f5f9' } },
+      legend: { display: opts.legend !== false, labels: { color: '#1A1A1A', font: { family: 'Open Sans' } } },
       tooltip: {
         callbacks: {
           label: (ctx) => {
@@ -12797,8 +12814,8 @@ function chartOpts(opts = {}) {
       }
     },
     scales: opts.noScales ? {} : {
-      x: { ticks: { color: '#94a3b8' }, grid: { color: '#33415540' } },
-      y: { ticks: { color: '#94a3b8', callback: (v) => fmt(v, 0) + (opts.suffix || '') }, grid: { color: '#33415540' } }
+      x: { ticks: { color: '#545454', font: { family: 'Open Sans' } }, grid: { color: '#E0E0E0' } },
+      y: { ticks: { color: '#545454', font: { family: 'Open Sans' }, callback: (v) => fmt(v, 0) + (opts.suffix || '') }, grid: { color: '#E0E0E0' } }
     }
   };
 }

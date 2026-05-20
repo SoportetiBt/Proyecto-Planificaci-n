@@ -12477,6 +12477,36 @@ function ocupColorClass(pct) {
   return 'danger';
 }
 
+// Acumula guías usadas vs capacidad por (fecha, nodo) según filtros.
+// Devuelve un mapa { 'fecha|nodo': { fecha, nodo, usadas, planta } }.
+function buildGuiasPorDiaNodo(state, filtros, recordsPre) {
+  const map = {};
+  const recs = recordsPre || applyFilters(buildUnifiedRecords(state), filtros);
+  // Rosen: contar nro_f12 únicos por (fecha, nodo)
+  recs.forEach(r => {
+    if (!r.fecha || !r.ceco || !r.nro_f12) return;
+    const cap = (state.capacidades_nodos || {})[r.ceco];
+    if (!cap || !cap.guia_planta) return;
+    const k = `${r.fecha}|${r.ceco}`;
+    if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, _guias: new Set(), _canon: 0, planta: cap.guia_planta };
+    map[k]._guias.add(r.nro_f12);
+  });
+  // Canon: sumar num_guias desde resumen vehículos
+  getCanonVehiculos(state).forEach(r => {
+    if (!passesDate(r, filtros)) return;
+    if (filtros.operacion && filtros.operacion !== 'Canon') return;
+    if (filtros.ceco && r.ceco !== filtros.ceco) return;
+    if (!r.fecha || !r.ceco) return;
+    const cap = (state.capacidades_nodos || {})[r.ceco];
+    if (!cap || !cap.guia_planta) return;
+    const k = `${r.fecha}|${r.ceco}`;
+    if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, _guias: new Set(), _canon: 0, planta: cap.guia_planta };
+    map[k]._canon += toNum(r.num_guias);
+  });
+  Object.values(map).forEach(m => { m.usadas = m._guias.size + m._canon; });
+  return map;
+}
+
 // Acumula m³ usados / planta por (fecha, nodo) según filtros.
 // Devuelve un mapa { 'fecha|nodo': { fecha, nodo, usado, planta } }.
 function buildOcupPorDiaNodo(state, filtros, recordsPre) {
@@ -12537,11 +12567,12 @@ function renderKPIResumen(state, filtros) {
   const sumP = entries.reduce((a, x) => a + x.planta, 0);
   const ocupAvg = sumP > 0 ? (sumU / sumP) * 100 : null;
 
-  // 2) Pico máximo (peor día-nodo)
-  let pico = { pct: -1, fecha: '', nodo: '' };
-  entries.forEach(x => {
-    const pct = x.planta > 0 ? (x.usado / x.planta) * 100 : 0;
-    if (pct > pico.pct) pico = { pct, fecha: x.fecha, nodo: x.nodo };
+  // 2) Pico máximo — basado en GUÍAS diarias vs capacidad de guías
+  const guiasMap = buildGuiasPorDiaNodo(state, filtros, records);
+  let pico = { pct: -1, fecha: '', nodo: '', usadas: 0, planta: 0 };
+  Object.values(guiasMap).forEach(x => {
+    const pct = x.planta > 0 ? (x.usadas / x.planta) * 100 : 0;
+    if (pct > pico.pct) pico = { pct, fecha: x.fecha, nodo: x.nodo, usadas: x.usadas, planta: x.planta };
   });
 
   // 3) Días sobre capacidad (>100%)
@@ -12581,7 +12612,9 @@ function renderKPIResumen(state, filtros) {
   const ocupClass = ocupAvg != null ? ocupColorClass(ocupAvg) : '';
   const picoTxt = pico.pct >= 0 ? fmt(pico.pct, 1) + '%' : '–';
   const picoClass = pico.pct >= 0 ? ocupColorClass(pico.pct) : '';
-  const picoDet = pico.fecha ? `${pico.fecha} · ${pico.nodo}` : 'sin datos';
+  const picoDet = pico.fecha
+    ? `${pico.fecha} · ${pico.nodo} · ${fmt(pico.usadas,0)} de ${fmt(pico.planta,0)} guías`
+    : 'sin datos';
   const diasSat = diasSobre.size;
   const diasClass = diasSat === 0 ? 'success' : (diasSat <= 3 ? 'warning' : 'danger');
   let tendTxt = '–', tendDet = 'sin período previo', tendClass = '';
@@ -12601,7 +12634,7 @@ function renderKPIResumen(state, filtros) {
       <div class="kpi-detail">Promedio ponderado (m³ usados / planta)</div>
     </div>
     <div class="kpi-card ${picoClass}">
-      <div class="kpi-label">Pico máximo</div>
+      <div class="kpi-label">Pico de guías</div>
       <div class="kpi-value">${picoTxt}</div>
       <div class="kpi-detail">${picoDet}</div>
     </div>
@@ -12687,14 +12720,17 @@ function renderChartsResumen(state, filtros) {
     options: chartOpts({ legend: false })
   });
 
-  // Ocupación nodos
-  const ocup = [];
-  nodos.forEach(n => {
-    const cap = (state.capacidades_nodos || {})[n];
-    if (cap && cap.mt3_planta) {
-      ocup.push({ nodo: n, pct: (porNodo[n].mt3 / cap.mt3_planta) * 100 });
-    }
+  // Ocupación nodos — promedio ponderado: Σ m³ usados / Σ (planta × días con operación)
+  const ocupMapChart = buildOcupPorDiaNodo(state, filtros, records);
+  const ocupAcum = {};
+  Object.values(ocupMapChart).forEach(x => {
+    if (!ocupAcum[x.nodo]) ocupAcum[x.nodo] = { usado: 0, planta: 0 };
+    ocupAcum[x.nodo].usado += x.usado;
+    ocupAcum[x.nodo].planta += x.planta;
   });
+  const ocup = nodos
+    .filter(n => ocupAcum[n] && ocupAcum[n].planta > 0)
+    .map(n => ({ nodo: n, pct: (ocupAcum[n].usado / ocupAcum[n].planta) * 100 }));
   destroyChart('chartOcup');
   CHARTS.chartOcup = new Chart(document.getElementById('chartOcup'), {
     type: 'bar',

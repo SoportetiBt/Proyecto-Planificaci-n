@@ -12205,12 +12205,12 @@ function buildUnifiedRecords(state) {
       nro_f12: r.nro_f12, cliente: r.cliente, comuna: r.comuna,
     });
   });
-  // Canon RM + V detalle (por guía)
+  // Canon RM + V detalle (por guía) — Canon NO tiene paquetes (guías = órdenes)
   getCanonDetalle(state).forEach(r => {
     recs.push({
       fecha: r.fecha, operacion: 'Canon', ceco: r.ceco || 'C_RM',
       patente: r.patente, ordenes: 1, mt3: 0,
-      paquetes: r.cantidad || 0,
+      paquetes: 0,
       nro_f12: r.numero_guia, cliente: null, comuna: r.comuna || r.geocerca,
     });
   });
@@ -12556,6 +12556,25 @@ function renderKPIResumen(state, filtros) {
   records.forEach(r => { if (r.patente) patentes.add(r.patente); });
   const paquetes = records.reduce((a, b) => a + (b.paquetes || 0), 0);
 
+  // Citación promedio de vehículos = patentes distintas por día, promediado
+  const patentesPorDia = {};
+  records.forEach(r => {
+    if (!r.fecha || !r.patente) return;
+    if (!patentesPorDia[r.fecha]) patentesPorDia[r.fecha] = new Set();
+    patentesPorDia[r.fecha].add(r.patente);
+  });
+  getCanonVehiculos(state).forEach(r => {
+    if (!passesDate(r, filtros)) return;
+    if (filtros.operacion && filtros.operacion !== 'Canon') return;
+    if (filtros.ceco && r.ceco !== filtros.ceco) return;
+    if (!r.fecha || !r.patente) return;
+    if (!patentesPorDia[r.fecha]) patentesPorDia[r.fecha] = new Set();
+    patentesPorDia[r.fecha].add(r.patente);
+  });
+  const diasConVehs = Object.keys(patentesPorDia).length;
+  const totVehDia = Object.values(patentesPorDia).reduce((a, s) => a + s.size, 0);
+  const citacionAvg = diasConVehs > 0 ? totVehDia / diasConVehs : 0;
+
   // ============================================
   // Nuevas métricas: % Ocupación / Pico / Días saturados / Tendencia
   // ============================================
@@ -12660,9 +12679,9 @@ function renderKPIResumen(state, filtros) {
       <div class="kpi-detail">Únicas por nodo y operación</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Vehículos operando</div>
-      <div class="kpi-value">${fmt(patentes.size, 0)}</div>
-      <div class="kpi-detail">Patentes distintas</div>
+      <div class="kpi-label">Citación promedio</div>
+      <div class="kpi-value">${fmt(citacionAvg, 1)}</div>
+      <div class="kpi-detail">Vehículos/día (${fmt(patentes.size,0)} distintos en ${diasConVehs} d)</div>
     </div>
     <div class="kpi-card warning">
       <div class="kpi-label">Paquetes / Cantidades</div>

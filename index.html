@@ -12468,6 +12468,43 @@ function showTab(tab) {
 // =========================================================
 // RENDER — KPIs Resumen
 // =========================================================
+// Color para % ocupación: cerca de 100% es lo ideal (verde),
+// muy bajo o sobrecargado es alerta (rojo / amarillo).
+function ocupColorClass(pct) {
+  if (pct == null || isNaN(pct)) return '';
+  if (pct >= 85 && pct <= 100) return 'success';
+  if ((pct >= 70 && pct < 85) || (pct > 100 && pct <= 110)) return 'warning';
+  return 'danger';
+}
+
+// Acumula m³ usados / planta por (fecha, nodo) según filtros.
+// Devuelve un mapa { 'fecha|nodo': { fecha, nodo, usado, planta } }.
+function buildOcupPorDiaNodo(state, filtros, recordsPre) {
+  const map = {};
+  const recs = recordsPre || applyFilters(buildUnifiedRecords(state), filtros);
+  recs.forEach(r => {
+    if (!r.fecha || !r.ceco) return;
+    const cap = (state.capacidades_nodos || {})[r.ceco];
+    if (!cap || !cap.mt3_planta) return;
+    const k = `${r.fecha}|${r.ceco}`;
+    if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, usado: 0, planta: cap.mt3_planta };
+    map[k].usado += r.mt3 || 0;
+  });
+  // Canon usa capacidad_uno desde resumen de vehículos
+  getCanonVehiculos(state).forEach(r => {
+    if (!passesDate(r, filtros)) return;
+    if (filtros.operacion && filtros.operacion !== 'Canon') return;
+    if (filtros.ceco && r.ceco !== filtros.ceco) return;
+    if (!r.fecha || !r.ceco) return;
+    const cap = (state.capacidades_nodos || {})[r.ceco];
+    if (!cap || !cap.mt3_planta) return;
+    const k = `${r.fecha}|${r.ceco}`;
+    if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, usado: 0, planta: cap.mt3_planta };
+    map[k].usado += toNum(r.capacidad_uno);
+  });
+  return map;
+}
+
 function renderKPIResumen(state, filtros) {
   const cont = document.getElementById('kpiResumen');
   const records = applyFilters(buildUnifiedRecords(state), filtros);
@@ -12489,7 +12526,96 @@ function renderKPIResumen(state, filtros) {
   records.forEach(r => { if (r.patente) patentes.add(r.patente); });
   const paquetes = records.reduce((a, b) => a + (b.paquetes || 0), 0);
 
+  // ============================================
+  // Nuevas métricas: % Ocupación / Pico / Días saturados / Tendencia
+  // ============================================
+  const ocupMap = buildOcupPorDiaNodo(state, filtros, records);
+  const entries = Object.values(ocupMap);
+
+  // 1) % Ocupación promedio ponderado
+  const sumU = entries.reduce((a, x) => a + x.usado, 0);
+  const sumP = entries.reduce((a, x) => a + x.planta, 0);
+  const ocupAvg = sumP > 0 ? (sumU / sumP) * 100 : null;
+
+  // 2) Pico máximo (peor día-nodo)
+  let pico = { pct: -1, fecha: '', nodo: '' };
+  entries.forEach(x => {
+    const pct = x.planta > 0 ? (x.usado / x.planta) * 100 : 0;
+    if (pct > pico.pct) pico = { pct, fecha: x.fecha, nodo: x.nodo };
+  });
+
+  // 3) Días sobre capacidad (>100%)
+  const diasSobre = new Set();
+  entries.forEach(x => {
+    const pct = x.planta > 0 ? (x.usado / x.planta) * 100 : 0;
+    if (pct > 100) diasSobre.add(x.fecha);
+  });
+
+  // 4) Tendencia vs período anterior de igual duración
+  let tendencia = null;
+  const fechas = Array.from(new Set(entries.map(e => e.fecha))).sort();
+  if (fechas.length > 0 && ocupAvg != null) {
+    const minF = fechas[0];
+    const maxF = fechas[fechas.length - 1];
+    const dMin = new Date(minF + 'T00:00:00');
+    const dMax = new Date(maxF + 'T00:00:00');
+    const durMs = dMax - dMin + 86400000;
+    const prevMaxD = new Date(dMin - 86400000);
+    const prevMinD = new Date(prevMaxD - durMs + 86400000);
+    const fmtD = d => d.toISOString().slice(0, 10);
+    const pMin = fmtD(prevMinD), pMax = fmtD(prevMaxD);
+    // Construir ocupación del período anterior con los mismos filtros (pero rango previo)
+    const filtrosPrev = { ...filtros, desde: pMin, hasta: pMax, fecha: null };
+    const prevRecs = applyFilters(buildUnifiedRecords(state), filtrosPrev);
+    const prevMap = buildOcupPorDiaNodo(state, filtrosPrev, prevRecs);
+    const prevEntries = Object.values(prevMap);
+    const pU = prevEntries.reduce((a, x) => a + x.usado, 0);
+    const pP = prevEntries.reduce((a, x) => a + x.planta, 0);
+    if (pP > 0) {
+      const prevAvg = (pU / pP) * 100;
+      tendencia = { anterior: prevAvg, delta: ocupAvg - prevAvg, pMin, pMax };
+    }
+  }
+
+  const ocupTxt = ocupAvg != null ? fmt(ocupAvg, 1) + '%' : '–';
+  const ocupClass = ocupAvg != null ? ocupColorClass(ocupAvg) : '';
+  const picoTxt = pico.pct >= 0 ? fmt(pico.pct, 1) + '%' : '–';
+  const picoClass = pico.pct >= 0 ? ocupColorClass(pico.pct) : '';
+  const picoDet = pico.fecha ? `${pico.fecha} · ${pico.nodo}` : 'sin datos';
+  const diasSat = diasSobre.size;
+  const diasClass = diasSat === 0 ? 'success' : (diasSat <= 3 ? 'warning' : 'danger');
+  let tendTxt = '–', tendDet = 'sin período previo', tendClass = '';
+  if (tendencia) {
+    const sign = tendencia.delta > 0 ? '↑' : (tendencia.delta < 0 ? '↓' : '→');
+    tendTxt = `${sign} ${fmt(Math.abs(tendencia.delta), 1)} pp`;
+    tendDet = `vs ${tendencia.pMin} a ${tendencia.pMax}`;
+    if (tendencia.delta > 0 && ocupAvg <= 100) tendClass = 'success';
+    else if (tendencia.delta > 0 && ocupAvg > 100) tendClass = 'warning';
+    else if (tendencia.delta < 0) tendClass = 'warning';
+  }
+
   cont.innerHTML = `
+    <div class="kpi-card ${ocupClass}">
+      <div class="kpi-label">% Ocupación</div>
+      <div class="kpi-value">${ocupTxt}</div>
+      <div class="kpi-detail">Promedio ponderado (m³ usados / planta)</div>
+    </div>
+    <div class="kpi-card ${picoClass}">
+      <div class="kpi-label">Pico máximo</div>
+      <div class="kpi-value">${picoTxt}</div>
+      <div class="kpi-detail">${picoDet}</div>
+    </div>
+    <div class="kpi-card ${diasClass}">
+      <div class="kpi-label">Días sobre capacidad</div>
+      <div class="kpi-value">${fmt(diasSat, 0)}</div>
+      <div class="kpi-detail">Días con ocupación > 100%</div>
+    </div>
+    <div class="kpi-card ${tendClass}">
+      <div class="kpi-label">Tendencia</div>
+      <div class="kpi-value">${tendTxt}</div>
+      <div class="kpi-detail">${tendDet}</div>
+    </div>
+
     <div class="kpi-card">
       <div class="kpi-label">m³ totales</div>
       <div class="kpi-value">${fmt(mt3_total, 1)}</div>
@@ -12577,7 +12703,7 @@ function renderChartsResumen(state, filtros) {
       datasets: [{
         label: '% Ocupación m³',
         data: ocup.map(o => o.pct),
-        backgroundColor: ocup.map(o => o.pct > 100 ? '#ef4444' : (o.pct > 85 ? '#f97316' : '#22c55e'))
+        backgroundColor: ocup.map(o => (o.pct < 70 || o.pct > 110) ? '#ef4444' : ((o.pct >= 85 && o.pct <= 100) ? '#22c55e' : '#f97316'))
       }]
     },
     options: chartOpts({ legend: false, suffix: '%' })

@@ -11970,18 +11970,31 @@ let STATE = {
   }
 };
 
-// Helpers para Canon (consolida RM + V)
+// Detectar vehículos de Atención a Tienda (última milla: tienda + servicios técnicos)
+function esAtencionTienda(patente) {
+  if (!patente) return false;
+  const p = String(patente).toUpperCase().trim();
+  return p.includes('TIENDA') || p.includes('SSTT');
+}
+// Reasignar el ceco al nodo virtual si la patente es atención a tienda
+function getCecoEfectivo(patente, cecoOriginal) {
+  return esAtencionTienda(patente) ? 'ATN_TIENDA' : cecoOriginal;
+}
+
+// Helpers para Canon (consolida RM + V) — ya normalizan ceco
 function getCanonVehiculos(state) {
-  return [
+  const recs = [
     ...(state.planificacion_diaria.canon_rm_vehiculos || []),
     ...(state.planificacion_diaria.canon_v_vehiculos || [])
   ];
+  return recs.map(r => ({ ...r, ceco: getCecoEfectivo(r.patente, r.ceco) }));
 }
 function getCanonDetalle(state) {
-  return [
+  const recs = [
     ...(state.planificacion_diaria.canon_rm_detalle || []),
     ...(state.planificacion_diaria.canon_v_detalle || [])
   ];
+  return recs.map(r => ({ ...r, ceco: getCecoEfectivo(r.patente, r.ceco) }));
 }
 
 // Charts globales para poder destruirlos al re-render
@@ -12203,10 +12216,11 @@ function getMonth(dateStr) {
 // =========================================================
 function buildUnifiedRecords(state) {
   const recs = [];
-  // Rosen V/IV (por orden)
+  // Rosen V/IV (por orden) — aplica nodo virtual ATN_TIENDA si la patente lo amerita
   (state.planificacion_diaria.rosen_v || []).forEach(r => {
     recs.push({
-      fecha: r.fecha, operacion: 'Rosen', ceco: r.ceco || 'R_VIÑA',
+      fecha: r.fecha, operacion: 'Rosen',
+      ceco: getCecoEfectivo(r.patente, r.ceco || 'R_VIÑA'),
       patente: r.patente, ordenes: r.nro_f12 ? 1 : 0,
       mt3: r.volumen || 0, paquetes: r.cantidad || 0,
       nro_f12: r.nro_f12, cliente: r.cliente, comuna: r.comuna,
@@ -12214,7 +12228,8 @@ function buildUnifiedRecords(state) {
   });
   (state.planificacion_diaria.rosen_iv || []).forEach(r => {
     recs.push({
-      fecha: r.fecha, operacion: 'Rosen', ceco: r.ceco || 'R_SERENA',
+      fecha: r.fecha, operacion: 'Rosen',
+      ceco: getCecoEfectivo(r.patente, r.ceco || 'R_SERENA'),
       patente: r.patente, ordenes: r.nro_f12 ? 1 : 0,
       mt3: r.volumen || 0, paquetes: r.cantidad || 0,
       nro_f12: r.nro_f12, cliente: r.cliente, comuna: r.comuna,
@@ -12591,6 +12606,25 @@ function renderKPIResumen(state, filtros) {
   const citacionAvg = diasConVehs > 0 ? totVehDia / diasConVehs : 0;
 
   // ============================================
+  // Nuevos KPIs operacionales (promedio ponderado)
+  // ============================================
+  // Órdenes únicas por vehículo: total órdenes / total vehículos-día
+  const ordenesPorVeh = totVehDia > 0 ? ordenes.size / totVehDia : 0;
+  // m³ por vehículo (incluye Canon): total m³ / total vehículos-día
+  const mt3PorVeh = totVehDia > 0 ? mt3_total / totVehDia : 0;
+
+  // Pico de m³ — día/nodo con mayor m³ despachado (usa ocupMap ya calculado arriba)
+  let picoMt3 = { mt3: -1, fecha: '', nodo: '', planta: 0 };
+  Object.values(ocupMap).forEach(x => {
+    if (x.usado > picoMt3.mt3) picoMt3 = { mt3: x.usado, fecha: x.fecha, nodo: x.nodo, planta: x.planta };
+  });
+
+  // m³ por nodo promedio: total m³ / cantidad de nodos con operación en el período
+  const nodosConOperacion = new Set();
+  Object.values(ocupMap).forEach(x => { if (x.usado > 0) nodosConOperacion.add(x.nodo); });
+  const mt3PorNodoAvg = nodosConOperacion.size > 0 ? mt3_total / nodosConOperacion.size : 0;
+
+  // ============================================
   // Nuevas métricas: % Ocupación / Pico / Días saturados / Tendencia
   // ============================================
   const ocupMap = buildOcupPorDiaNodo(state, filtros, records);
@@ -12644,10 +12678,18 @@ function renderKPIResumen(state, filtros) {
 
   const ocupTxt = ocupAvg != null ? fmt(ocupAvg, 1) + '%' : '–';
   const ocupClass = ocupAvg != null ? ocupColorClass(ocupAvg) : '';
-  const picoTxt = pico.pct >= 0 ? fmt(pico.pct, 1) + '%' : '–';
+  // Máximo despachado: valor absoluto de guías + detalle de fecha/nodo + % vs capacidad
+  const picoTxt = pico.pct >= 0 ? fmt(pico.usadas, 0) + ' guías' : '–';
   const picoClass = pico.pct >= 0 ? ocupColorClass(pico.pct) : '';
   const picoDet = pico.fecha
-    ? `${pico.fecha} · ${pico.nodo} · ${fmt(pico.usadas,0)} de ${fmt(pico.planta,0)} guías`
+    ? `${pico.fecha} · ${pico.nodo} · ${fmt(pico.pct, 1)}% de capacidad`
+    : 'sin datos';
+  // Pico de m³: valor absoluto + detalle
+  const picoMt3Pct = picoMt3.planta > 0 ? (picoMt3.mt3 / picoMt3.planta) * 100 : 0;
+  const picoMt3Txt = picoMt3.mt3 > 0 ? fmt(picoMt3.mt3, 1) + ' m³' : '–';
+  const picoMt3Class = picoMt3.mt3 > 0 ? ocupColorClass(picoMt3Pct) : '';
+  const picoMt3Det = picoMt3.fecha
+    ? `${picoMt3.fecha} · ${picoMt3.nodo} · ${fmt(picoMt3Pct, 1)}% planta`
     : 'sin datos';
   const diasSat = diasSobre.size;
   const diasClass = diasSat === 0 ? 'success' : (diasSat <= 3 ? 'warning' : 'danger');
@@ -12668,9 +12710,14 @@ function renderKPIResumen(state, filtros) {
       <div class="kpi-detail">Promedio ponderado (m³ usados / planta)</div>
     </div>
     <div class="kpi-card ${picoClass}">
-      <div class="kpi-label">Pico de guías</div>
+      <div class="kpi-label">Máximo despachado</div>
       <div class="kpi-value">${picoTxt}</div>
       <div class="kpi-detail">${picoDet}</div>
+    </div>
+    <div class="kpi-card ${picoMt3Class}">
+      <div class="kpi-label">Pico de m³</div>
+      <div class="kpi-value">${picoMt3Txt}</div>
+      <div class="kpi-detail">${picoMt3Det}</div>
     </div>
     <div class="kpi-card ${diasClass}">
       <div class="kpi-label">Días sobre capacidad</div>
@@ -12703,6 +12750,22 @@ function renderKPIResumen(state, filtros) {
       <div class="kpi-value">${fmt(paquetes, 0)}</div>
       <div class="kpi-detail">Suma Cantidad Ruta</div>
     </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Órdenes / vehículo</div>
+      <div class="kpi-value">${fmt(ordenesPorVeh, 1)}</div>
+      <div class="kpi-detail">Promedio ponderado en el período</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">m³ / vehículo</div>
+      <div class="kpi-value">${fmt(mt3PorVeh, 1)}</div>
+      <div class="kpi-detail">Promedio ponderado en el período</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">m³ / nodo</div>
+      <div class="kpi-value">${fmt(mt3PorNodoAvg, 1)}</div>
+      <div class="kpi-detail">Promedio sobre ${nodosConOperacion.size} nodo${nodosConOperacion.size===1?'':'s'} con operación</div>
+    </div>
   `;
 }
 
@@ -12714,10 +12777,11 @@ function destroyChart(id) {
 }
 
 const COLORS_NODO = {
-  'C_RM': '#002E5D',     // Azul BT
-  'C_VIÑA': '#FF6600',   // Naranja BT
-  'R_VIÑA': '#1E88E5',   // Azul claro
-  'R_SERENA': '#6A1B9A'  // Violeta diferenciador
+  'C_RM': '#002E5D',      // Azul BT
+  'C_VIÑA': '#FF6600',    // Naranja BT
+  'R_VIÑA': '#1E88E5',    // Azul claro
+  'R_SERENA': '#6A1B9A',  // Violeta diferenciador
+  'ATN_TIENDA': '#545454' // Gris BT — atención a tienda (última milla)
 };
 
 function renderChartsResumen(state, filtros) {
@@ -12775,7 +12839,7 @@ function renderChartsResumen(state, filtros) {
       datasets: [{
         label: '% Ocupación m³',
         data: ocup.map(o => o.pct),
-        backgroundColor: ocup.map(o => (o.pct < 70 || o.pct > 110) ? '#ef4444' : ((o.pct >= 85 && o.pct <= 100) ? '#22c55e' : '#f97316'))
+        backgroundColor: ocup.map(o => COLORS_NODO[o.nodo] || '#94a3b8')
       }]
     },
     options: chartOpts({ legend: false, suffix: '%' })

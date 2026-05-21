@@ -12612,23 +12612,24 @@ function renderKPIResumen(state, filtros) {
   const ordenesPorVeh = totVehDia > 0 ? ordenes.size / totVehDia : 0;
   // m³ por vehículo (incluye Canon): total m³ / total vehículos-día
   const mt3PorVeh = totVehDia > 0 ? mt3_total / totVehDia : 0;
-
-  // Pico de m³ — día/nodo con mayor m³ despachado (usa ocupMap ya calculado arriba)
-  let picoMt3 = { mt3: -1, fecha: '', nodo: '', planta: 0 };
-  Object.values(ocupMap).forEach(x => {
-    if (x.usado > picoMt3.mt3) picoMt3 = { mt3: x.usado, fecha: x.fecha, nodo: x.nodo, planta: x.planta };
-  });
-
-  // m³ por nodo promedio: total m³ / cantidad de nodos con operación en el período
-  const nodosConOperacion = new Set();
-  Object.values(ocupMap).forEach(x => { if (x.usado > 0) nodosConOperacion.add(x.nodo); });
-  const mt3PorNodoAvg = nodosConOperacion.size > 0 ? mt3_total / nodosConOperacion.size : 0;
+  // picoMt3, nodosConOperacion y mt3PorNodoAvg se calculan más abajo,
+  // una vez que ocupMap ya está declarado.
 
   // ============================================
   // Nuevas métricas: % Ocupación / Pico / Días saturados / Tendencia
   // ============================================
   const ocupMap = buildOcupPorDiaNodo(state, filtros, records);
   const entries = Object.values(ocupMap);
+
+  // Pico de m³ — día/nodo con mayor m³ despachado
+  let picoMt3 = { mt3: -1, fecha: '', nodo: '', planta: 0 };
+  entries.forEach(x => {
+    if (x.usado > picoMt3.mt3) picoMt3 = { mt3: x.usado, fecha: x.fecha, nodo: x.nodo, planta: x.planta };
+  });
+  // m³ por nodo promedio: total m³ / cantidad de nodos con operación en el período
+  const nodosConOperacion = new Set();
+  entries.forEach(x => { if (x.usado > 0) nodosConOperacion.add(x.nodo); });
+  const mt3PorNodoAvg = nodosConOperacion.size > 0 ? mt3_total / nodosConOperacion.size : 0;
 
   // 1) % Ocupación promedio ponderado
   const sumU = entries.reduce((a, x) => a + x.usado, 0);

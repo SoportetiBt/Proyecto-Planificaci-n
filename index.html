@@ -469,6 +469,25 @@ footer {
       <option value="R_SERENA">R_SERENA (Rosen IV Coquimbo)</option>
     </select>
   </label>
+  <label data-filter="fPatente">Patente
+    <input type="text" id="fPatente" list="fPatenteList" oninput="renderAll()" placeholder="Buscar..." style="background:var(--card);color:var(--text);border:1px solid var(--border);padding:0.5rem 0.75rem;border-radius:6px;font-size:0.9rem;min-width:140px;font-family:inherit" />
+    <datalist id="fPatenteList"></datalist>
+  </label>
+  <label data-filter="fTipo">Tipo
+    <select id="fTipo" onchange="renderAll()">
+      <option value="">Todos</option>
+      <option value="CAMION">Camión</option>
+      <option value="FURGON">Furgón</option>
+      <option value="CAMIONETA">Camioneta</option>
+    </select>
+  </label>
+  <label data-filter="fUso">Uso
+    <select id="fUso" onchange="renderAll()">
+      <option value="">Todos</option>
+      <option value="planta">Planta</option>
+      <option value="back">Back UP</option>
+    </select>
+  </label>
   <label>&nbsp;
     <button class="btn btn-secondary" onclick="resetFilters()">Limpiar filtros</button>
   </label>
@@ -12501,7 +12520,7 @@ const FILTROS_VISIBLES = {
   'resumen':     ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion'],          // sin Nodo
   'operaciones': ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion','fNodo'],
   'nodos':       ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion','fNodo'],
-  'vehiculos':   ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion','fNodo'],
+  'vehiculos':   ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion','fNodo','fPatente','fTipo','fUso'],
   'historico':   ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion','fNodo'],
   'detalle':     ['fAno','fMes','fFecha','fDesde','fHasta','fOperacion','fNodo'],
   'cargar':      []  // sin filtros
@@ -13012,46 +13031,200 @@ function chartOpts(opts = {}) {
 // =========================================================
 // RENDER — Por operación
 // =========================================================
+function _kpisOpRaw(state, filtros, op) {
+  const recs = applyFilters(buildUnifiedRecords(state), filtros).filter(r => r.operacion === op);
+  const mt3 = recs.reduce((a, b) => a + (b.mt3 || 0), 0);
+  let mt3Extra = 0;
+  if (op === 'Canon') {
+    getCanonVehiculos(state).forEach(r => {
+      if (!passesDate(r, filtros)) return;
+      if (filtros.ceco && r.ceco !== filtros.ceco) return;
+      mt3Extra += toNum(r.capacidad_uno);
+    });
+  }
+  const ord = new Set();
+  recs.forEach(r => { if (r.nro_f12) ord.add(`${r.ceco}|${r.nro_f12}`); });
+  const pat = new Set();
+  recs.forEach(r => { if (esPatenteReal(r.patente)) pat.add(r.patente); });
+  const paq = recs.reduce((a, b) => a + (b.paquetes || 0), 0);
+  return { mt3: mt3 + mt3Extra, ord: ord.size, pat: pat.size, paq };
+}
+
+function _periodoAnterior(filtros, records) {
+  const fechas = Array.from(new Set(records.map(r => r.fecha).filter(Boolean))).sort();
+  if (!fechas.length) return null;
+  const minF = fechas[0], maxF = fechas[fechas.length - 1];
+  const dMin = new Date(minF + 'T00:00:00');
+  const dMax = new Date(maxF + 'T00:00:00');
+  const durMs = dMax - dMin + 86400000;
+  const prevMaxD = new Date(dMin - 86400000);
+  const prevMinD = new Date(prevMaxD - durMs + 86400000);
+  const fmtD = d => d.toISOString().slice(0, 10);
+  return { pMin: fmtD(prevMinD), pMax: fmtD(prevMaxD) };
+}
+
+function _deltaBadge(actual, anterior) {
+  if (anterior == null || anterior === 0) return '';
+  const delta = ((actual - anterior) / anterior) * 100;
+  const arrow = delta > 0 ? '↑' : (delta < 0 ? '↓' : '→');
+  const color = delta > 0 ? 'var(--success)' : (delta < 0 ? 'var(--danger)' : 'var(--text-dim)');
+  return `<div style="font-size:0.8rem;color:${color};margin-top:0.25rem">${arrow} ${fmt(Math.abs(delta), 1)} pp</div>`;
+}
+
 function renderOperaciones(state, filtros) {
   const records = applyFilters(buildUnifiedRecords(state), filtros);
+  const cecoToOp = (c) => c && c.startsWith('C_') ? 'Canon' : 'Rosen';
+
+  let opMostrar = filtros.operacion;
+  if (!opMostrar && filtros.ceco) opMostrar = cecoToOp(filtros.ceco);
+
+  const bloqueCanon = document.getElementById('bloqueCanon');
+  const bloqueRosen = document.getElementById('bloqueRosen');
+  bloqueCanon.style.display = (!opMostrar || opMostrar === 'Canon') ? '' : 'none';
+  bloqueRosen.style.display = (!opMostrar || opMostrar === 'Rosen') ? '' : 'none';
+
+  const periodoAnt = _periodoAnterior(filtros, records);
+  let filtrosPrev = null;
+  if (periodoAnt) filtrosPrev = { ...filtros, desde: periodoAnt.pMin, hasta: periodoAnt.pMax, fecha: null };
 
   function kpiOp(op, color) {
-    const recs = records.filter(r => r.operacion === op);
-    const mt3 = recs.reduce((a, b) => a + (b.mt3 || 0), 0);
-    let mt3Extra = 0;
-    if (op === 'Canon') {
-      getCanonVehiculos(state).forEach(r => {
-        if (!passesDate(r, filtros)) return;
-        if (filtros.ceco && r.ceco !== filtros.ceco) return;
-        mt3Extra += toNum(r.capacidad_uno);
-      });
-    }
-    const ord = new Set();
-    recs.forEach(r => { if (r.nro_f12) ord.add(`${r.ceco}|${r.nro_f12}`); });
-    const pat = new Set();
-    recs.forEach(r => { if (r.patente) pat.add(r.patente); });
-    const paq = recs.reduce((a, b) => a + (b.paquetes || 0), 0);
+    const k = _kpisOpRaw(state, filtros, op);
+    const kPrev = filtrosPrev ? _kpisOpRaw(state, filtrosPrev, op) : null;
     return `
       <div class="kpi-card ${color}">
         <div class="kpi-label">m³ ${op}</div>
-        <div class="kpi-value">${fmt(mt3 + mt3Extra, 1)}</div>
+        <div class="kpi-value">${fmt(k.mt3, 1)}</div>
+        ${kPrev ? _deltaBadge(k.mt3, kPrev.mt3) : ''}
       </div>
       <div class="kpi-card ${color}">
         <div class="kpi-label">Órdenes ${op}</div>
-        <div class="kpi-value">${fmt(ord.size, 0)}</div>
+        <div class="kpi-value">${fmt(k.ord, 0)}</div>
+        ${kPrev ? _deltaBadge(k.ord, kPrev.ord) : ''}
       </div>
       <div class="kpi-card ${color}">
         <div class="kpi-label">Vehículos ${op}</div>
-        <div class="kpi-value">${fmt(pat.size, 0)}</div>
+        <div class="kpi-value">${fmt(k.pat, 0)}</div>
+        ${kPrev ? _deltaBadge(k.pat, kPrev.pat) : ''}
       </div>
       <div class="kpi-card ${color}">
         <div class="kpi-label">Paquetes ${op}</div>
-        <div class="kpi-value">${fmt(paq, 0)}</div>
+        <div class="kpi-value">${fmt(k.paq, 0)}</div>
+        ${kPrev ? _deltaBadge(k.paq, kPrev.paq) : ''}
       </div>
     `;
   }
-  document.getElementById('kpiCanon').innerHTML = kpiOp('Canon', 'canon');
-  document.getElementById('kpiRosen').innerHTML = kpiOp('Rosen', 'rosen');
+
+  if (!opMostrar || opMostrar === 'Canon') document.getElementById('kpiCanon').innerHTML = kpiOp('Canon', 'canon');
+  if (!opMostrar || opMostrar === 'Rosen') document.getElementById('kpiRosen').innerHTML = kpiOp('Rosen', 'rosen');
+
+  renderChartsOperacion(state, filtros, 'Canon', opMostrar);
+  renderChartsOperacion(state, filtros, 'Rosen', opMostrar);
+}
+
+function renderChartsOperacion(state, filtros, op, opMostrar) {
+  if (opMostrar && opMostrar !== op) return;
+  const idPrefix = op === 'Canon' ? 'Canon' : 'Rosen';
+  const colorOp = op === 'Canon' ? '#FF6600' : '#1E88E5';
+
+  const recs = applyFilters(buildUnifiedRecords(state), filtros).filter(r => r.operacion === op);
+  const canonExtra = [];
+  if (op === 'Canon') {
+    getCanonVehiculos(state).forEach(r => {
+      if (!passesDate(r, filtros)) return;
+      if (filtros.ceco && r.ceco !== filtros.ceco) return;
+      canonExtra.push({ fecha: r.fecha, ceco: r.ceco, mt3: toNum(r.capacidad_uno), num_guias: toNum(r.num_guias), patente: r.patente });
+    });
+  }
+
+  const modoTemporal = !!(filtros.operacion || filtros.ceco);
+  const tieneRango = !!(filtros.fecha || filtros.desde || filtros.hasta ||
+                        (filtros.anos && filtros.anos.size) || (filtros.meses && filtros.meses.size));
+  const granularidad = tieneRango ? 'dia' : 'mes';
+  function bucketKey(r) {
+    if (!modoTemporal) return r.ceco;
+    if (granularidad === 'dia') return r.fecha || '(sin fecha)';
+    return (r.fecha || '').slice(0, 7) || '(sin fecha)';
+  }
+  function labelDisplay(k) {
+    if (!modoTemporal) return k;
+    if (granularidad === 'mes' && /^\d{4}-\d{2}$/.test(k)) {
+      const [a, m] = k.split('-');
+      const meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+      return meses[parseInt(m,10)-1] + ' ' + a;
+    }
+    return k;
+  }
+
+  const buckets = {};
+  recs.forEach(r => {
+    const k = bucketKey(r);
+    if (!k) return;
+    if (!buckets[k]) buckets[k] = { mt3: 0, ord: new Set() };
+    buckets[k].mt3 += r.mt3 || 0;
+    if (r.nro_f12) buckets[k].ord.add(r.nro_f12);
+  });
+  canonExtra.forEach(r => {
+    const k = bucketKey(r);
+    if (!k) return;
+    if (!buckets[k]) buckets[k] = { mt3: 0, ord: new Set() };
+    buckets[k].mt3 += r.mt3;
+    if (r.num_guias) for (let i = 0; i < r.num_guias; i++) buckets[k].ord.add(`canon-${r.patente}-${i}`);
+  });
+
+  const labels = Object.keys(buckets).sort();
+  const labelsDisplay = labels.map(labelDisplay);
+  const colors = modoTemporal
+    ? labels.map(() => colorOp)
+    : labels.map(n => COLORS_NODO[n] || '#94a3b8');
+
+  const sufijo = modoTemporal ? (granularidad === 'dia' ? 'por día' : 'por mes') : 'por nodo';
+  const ttlM3 = document.getElementById('ttl' + idPrefix + 'M3');
+  const ttlOrd = document.getElementById('ttl' + idPrefix + 'Ord');
+  const ttlOcup = document.getElementById('ttl' + idPrefix + 'Ocup');
+  if (ttlM3) ttlM3.textContent = 'm³ ' + sufijo;
+  if (ttlOrd) ttlOrd.textContent = 'Órdenes ' + sufijo;
+  if (ttlOcup) ttlOcup.textContent = '% Ocupación ' + sufijo;
+
+  destroyChart('chart' + idPrefix + 'M3');
+  CHARTS['chart' + idPrefix + 'M3'] = new Chart(document.getElementById('chart' + idPrefix + 'M3'), {
+    type: 'bar',
+    data: { labels: labelsDisplay, datasets: [{ label: 'm³', data: labels.map(k => buckets[k].mt3), backgroundColor: colors }] },
+    options: chartOpts({ legend: false })
+  });
+  destroyChart('chart' + idPrefix + 'Ord');
+  CHARTS['chart' + idPrefix + 'Ord'] = new Chart(document.getElementById('chart' + idPrefix + 'Ord'), {
+    type: 'bar',
+    data: { labels: labelsDisplay, datasets: [{ label: 'Órdenes', data: labels.map(k => buckets[k].ord.size), backgroundColor: colors }] },
+    options: chartOpts({ legend: false })
+  });
+
+  const ocupMap = buildOcupPorDiaNodo(state, filtros, recs);
+  const ocupAcum = {};
+  Object.values(ocupMap).forEach(x => {
+    const opOfNode = (x.nodo && x.nodo.startsWith('C_')) ? 'Canon' : 'Rosen';
+    if (opOfNode !== op) return;
+    let key;
+    if (!modoTemporal) key = x.nodo;
+    else if (granularidad === 'dia') key = x.fecha;
+    else key = (x.fecha || '').slice(0, 7);
+    if (!ocupAcum[key]) ocupAcum[key] = { usado: 0, planta: 0 };
+    ocupAcum[key].usado += x.usado;
+    ocupAcum[key].planta += x.planta;
+  });
+  const okeys = Object.keys(ocupAcum).filter(k => ocupAcum[k].planta > 0).sort();
+  const ocup = okeys.map(k => ({ key: k, pct: (ocupAcum[k].usado / ocupAcum[k].planta) * 100 }));
+  const ocupColors = modoTemporal
+    ? ocup.map(() => colorOp)
+    : ocup.map(o => COLORS_NODO[o.key] || '#94a3b8');
+  destroyChart('chart' + idPrefix + 'Ocup');
+  CHARTS['chart' + idPrefix + 'Ocup'] = new Chart(document.getElementById('chart' + idPrefix + 'Ocup'), {
+    type: 'bar',
+    data: {
+      labels: ocup.map(o => labelDisplay(o.key)),
+      datasets: [{ label: '% Ocupación m³', data: ocup.map(o => o.pct), backgroundColor: ocupColors }]
+    },
+    options: chartOpts({ legend: false, suffix: '%' })
+  });
 }
 
 // =========================================================
@@ -13162,8 +13335,39 @@ function getPatentesDelDia(state, filtros) {
 }
 
 function renderVehiculos(state, filtros) {
-  const vehsTodos = getVehiculosDelDia(state, filtros);
+  let vehsTodos = getVehiculosDelDia(state, filtros);
   vehsTodos.sort((a, b) => (b.mt3_uso || 0) - (a.mt3_uso || 0));
+
+  // Excluir pseudo-patentes (TIENDA, BAJADA, SSTT, etc.)
+  vehsTodos = vehsTodos.filter(v => esPatenteReal(v.patente));
+
+  // Filtros del módulo Vehículos
+  const fPatVal = (document.getElementById('fPatente') || {}).value || '';
+  const fTipoVal = (document.getElementById('fTipo') || {}).value || '';
+  const fUsoVal = (document.getElementById('fUso') || {}).value || '';
+  if (fPatVal) {
+    const q = fPatVal.trim().toUpperCase();
+    vehsTodos = vehsTodos.filter(v => String(v.patente || '').toUpperCase().includes(q));
+  }
+  if (fTipoVal) {
+    vehsTodos = vehsTodos.filter(v => String(v.tipo || '').toUpperCase() === fTipoVal);
+  }
+  if (fUsoVal) {
+    const cat = {};
+    (state.catalogo_vehiculos || []).forEach(c => {
+      if (c.patente) cat[String(c.patente).trim().toUpperCase()] = String(c.uso || '').toLowerCase();
+    });
+    vehsTodos = vehsTodos.filter(v => (cat[String(v.patente).trim().toUpperCase()] || '').includes(fUsoVal));
+  }
+
+  // Datalist de patentes (autocomplete)
+  const dl = document.getElementById('fPatenteList');
+  if (dl) {
+    const ps = new Set();
+    (state.catalogo_vehiculos || []).forEach(c => { if (esPatenteReal(c.patente)) ps.add(c.patente); });
+    getVehiculosDelDia(state, filtros).forEach(v => { if (esPatenteReal(v.patente)) ps.add(v.patente); });
+    dl.innerHTML = Array.from(ps).sort().map(p => `<option value="${p}">`).join('');
+  }
 
   // Aplicar filtro multi-patente
   const haySeleccion = PATENTES_SELECCIONADAS.size > 0 && !PATENTES_SELECCIONADAS.has('__NONE__');

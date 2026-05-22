@@ -12542,14 +12542,14 @@ function showTab(tab) {
   document.getElementById('sec-' + tab).classList.add('active');
   document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
   applyFiltersVisibility(tab);
-  // Si entra a Resumen y hay Nodo activo, limpiarlo silenciosamente y re-renderizar
+  // Si entra a Resumen y hay Nodo activo, limpiarlo silenciosamente
   if (tab === 'resumen') {
     const nodoSel = document.getElementById('fNodo');
-    if (nodoSel && nodoSel.value) {
-      nodoSel.value = '';
-      renderAll();
-    }
+    if (nodoSel && nodoSel.value) nodoSel.value = '';
   }
+  // Re-renderizar después de activar la pestaña, así los charts que dependen
+  // de canvas visibles se crean correctamente.
+  renderAll();
 }
 
 // =========================================================
@@ -12933,6 +12933,8 @@ const COLORS_NODO = {
 function renderChartsResumen(state, filtros) {
   // Resumen es vista panorámica: siempre comparativo por nodo.
   // Vista temporal vive en la pestaña Histórico.
+  const canvasResTest = document.getElementById('chartM3Nodo');
+  if (!canvasResTest || canvasResTest.offsetParent === null) return;
   const records = applyFilters(buildUnifiedRecords(state), filtros);
   const porNodo = {};
   records.forEach(r => {
@@ -13124,6 +13126,10 @@ function renderOperaciones(state, filtros) {
 function renderChartsOperacion(state, filtros, op, opMostrar) {
   if (opMostrar && opMostrar !== op) return;
   const idPrefix = op === 'Canon' ? 'Canon' : 'Rosen';
+  // Si el canvas no está visible (sección inactiva), salir sin error.
+  // Se re-rendea al activar la pestaña (ver showTab).
+  const canvasTest = document.getElementById('chart' + idPrefix + 'M3');
+  if (!canvasTest || canvasTest.offsetParent === null) return;
   const colorOp = op === 'Canon' ? '#FF6600' : '#1E88E5';
 
   const recs = applyFilters(buildUnifiedRecords(state), filtros).filter(r => r.operacion === op);
@@ -13449,6 +13455,8 @@ function renderVehiculos(state, filtros) {
 // RENDER — Histórico (mes/semana/día)
 // =========================================================
 function renderHistorico(state, filtros) {
+  const canvasHistTest = document.getElementById('chartHistDia');
+  if (!canvasHistTest || canvasHistTest.offsetParent === null) return;
   // Combinamos histórico maestro + planificación diaria actual
   let hist = (state.historico_maestro || []).map(r => ({
     fecha: r.fecha_plan || r.fecha_desp,

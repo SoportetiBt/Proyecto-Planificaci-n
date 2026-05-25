@@ -580,7 +580,7 @@ footer {
       <table id="tablaNodos">
         <thead><tr>
           <th>Nodo</th><th>Veh. totales</th><th>Veh. planta</th><th>Veh. citados</th>
-          <th>Guías planta</th><th>Guías citadas</th><th>% Guías pp</th>
+          <th>Guías planta</th><th>Guías planificadas</th><th>% Guías pp</th>
           <th>m³ planta</th><th>m³ usados</th><th>% m³ pp</th>
         </tr></thead>
         <tbody></tbody>
@@ -616,7 +616,7 @@ footer {
       <table id="tablaVehiculos">
         <thead><tr>
           <th style="width:1.5rem"></th><th>Patente</th><th>Operación</th><th>Nodo</th><th>Tipo</th>
-          <th>m³ Capacidad pp</th><th>% Ocupación pp</th><th>Órdenes</th>
+          <th>m³ Capacidad</th><th>% Ocupación pp</th><th>Órdenes</th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -13583,12 +13583,15 @@ function renderNodos(state, filtros) {
     const pctM = pct(data.mt3, cap.mt3_planta);
     const op = n.startsWith('C_') ? 'Canon' : 'Rosen';
     const diasHab = tieneRango ? diasHabilesEnRango(op, rango.desde, rango.hasta) : 1;
-    const guiaPlantaShow = tieneRango ? (toNum(cap.guia_planta) * diasHab) : toNum(cap.guia_planta);
-    const mt3PlantaShow = tieneRango ? (toNum(cap.mt3_planta) * diasHab) : toNum(cap.mt3_planta);
-    const pctGpp = guiaPlantaShow > 0 ? (data.ord.size / guiaPlantaShow) * 100 : 0;
-    const pctMpp = mt3PlantaShow > 0 ? (data.mt3 / mt3PlantaShow) * 100 : 0;
-    const finalPctG = tieneRango ? pctGpp : pctG;
-    const finalPctM = tieneRango ? pctMpp : pctM;
+    // Cuando hay rango: mostrar TODAS las cifras como promedio diario (pp)
+    // Capacidad pp = capacidad diaria del Maestro (estática, no multiplicada por días)
+    const guiaPlantaShow = toNum(cap.guia_planta);
+    const mt3PlantaShow = toNum(cap.mt3_planta);
+    // Citado/usado pp = total del período / días hábiles
+    const guiasPlanShow = tieneRango && diasHab > 0 ? (data.ord.size / diasHab) : data.ord.size;
+    const mt3UsadoShow = tieneRango && diasHab > 0 ? (data.mt3 / diasHab) : data.mt3;
+    const finalPctG = guiaPlantaShow > 0 ? (guiasPlanShow / guiaPlantaShow) * 100 : 0;
+    const finalPctM = mt3PlantaShow > 0 ? (mt3UsadoShow / mt3PlantaShow) * 100 : 0;
 
     tbody.insertAdjacentHTML('beforeend', `
       <tr>
@@ -13597,19 +13600,19 @@ function renderNodos(state, filtros) {
         <td>${fmt(catPlanta[n], 0)}</td>
         <td>${fmt(data.pat.size, 0)}</td>
         <td>${fmt(guiaPlantaShow, 0)}</td>
-        <td>${fmt(data.ord.size, 0)}</td>
+        <td>${fmt(guiasPlanShow, 0)}</td>
         <td>${fmt(finalPctG, 1)}%<div class="progress-bar"><div class="progress-fill ${progressClass(finalPctG)}" style="width:${Math.min(finalPctG, 100)}%"></div></div></td>
         <td>${fmt(mt3PlantaShow, 1)}</td>
-        <td>${fmt(data.mt3, 1)}</td>
+        <td>${fmt(mt3UsadoShow, 1)}</td>
         <td>${fmt(finalPctM, 1)}%<div class="progress-bar"><div class="progress-fill ${progressClass(finalPctM)}" style="width:${Math.min(finalPctM, 100)}%"></div></div></td>
       </tr>
     `);
 
     chartLabels.push(n);
     chartGuiasPlanta.push(guiaPlantaShow);
-    chartGuiasUsadas.push(data.ord.size);
+    chartGuiasUsadas.push(guiasPlanShow);
     chartMt3Planta.push(mt3PlantaShow);
-    chartMt3Usados.push(data.mt3);
+    chartMt3Usados.push(mt3UsadoShow);
   });
 
   // Gráficos: capacidad vs uso por nodo (m³ y guías)
@@ -13781,8 +13784,11 @@ function renderVehiculos(state, filtros) {
   const tbody = document.querySelector('#tablaVehiculos tbody');
   tbody.innerHTML = '';
   lista.forEach((g, idx) => {
-    const mt3CapPp = g.mt3CapDiaria * g.diasOperados.size;
-    const ocupPp = mt3CapPp > 0 ? (g.mt3UsoTot / mt3CapPp) * 100 : 0;
+    // m³ Capacidad ESTÁTICO = cap diaria del Maestro (no multiplicada por días)
+    // % Ocupación pp = promedio ponderado en el período (m³ usados total / cap × días)
+    const capDiaria = g.mt3CapDiaria;
+    const mt3CapTotalPeriodo = capDiaria * g.diasOperados.size;
+    const ocupPp = mt3CapTotalPeriodo > 0 ? (g.mt3UsoTot / mt3CapTotalPeriodo) * 100 : 0;
     const ops = Array.from(g.opsSet).join(', ');
     const nodos = Array.from(g.nodosSet).join(', ');
     // Fila resumen
@@ -13793,7 +13799,7 @@ function renderVehiculos(state, filtros) {
         <td>${ops}</td>
         <td>${nodos}</td>
         <td>${g.tipo}</td>
-        <td>${fmt(mt3CapPp, 1)}</td>
+        <td>${fmt(capDiaria, 1)}</td>
         <td>${fmt(ocupPp, 1)}%<div class="progress-bar"><div class="progress-fill ${progressClass(ocupPp)}" style="width:${Math.min(ocupPp, 100)}%"></div></div></td>
         <td>${fmt(g.ordTot, 0)}</td>
       </tr>

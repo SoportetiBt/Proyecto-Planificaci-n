@@ -12576,19 +12576,22 @@ function getFechasDisponibles(state) {
 
 function rellenarFechaSelect(state) {
   const sel = document.getElementById('fFecha');
-  const prev = sel.value;
-  sel.innerHTML = '';
-  const optAll = document.createElement('option');
-  optAll.value = ''; optAll.textContent = '(Todas)';
-  sel.appendChild(optAll);
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = ''; optAll.textContent = '(Todas)';
+    sel.appendChild(optAll);
+    const fechasS = getFechasDisponibles(state);
+    fechasS.forEach(f => {
+      const o = document.createElement('option');
+      o.value = f; o.textContent = f;
+      sel.appendChild(o);
+    });
+    if (prev && fechasS.includes(prev)) sel.value = prev;
+    else sel.value = '';
+  }
   const fechas = getFechasDisponibles(state);
-  fechas.forEach(f => {
-    const o = document.createElement('option');
-    o.value = f; o.textContent = f;
-    sel.appendChild(o);
-  });
-  if (prev && fechas.includes(prev)) sel.value = prev;
-  else sel.value = '';
   if (fechas.length) {
     const min = fechas[fechas.length-1];
     const max = fechas[0];

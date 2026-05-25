@@ -13429,6 +13429,45 @@ function _capacidadOp(state, filtros, op) {
   return { capGuias, capMt3, diasHab, diasTrab };
 }
 
+// Demanda exigida por el cliente para una operación y filtros dados
+// Retorna { guiasExigidas, mt3Exigidos, hayDemanda } sumando por cada día hábil que cubra
+// alguna fila de demanda_cliente que matchee (operación, nodo, fecha en rango).
+function _demandaClienteOp(state, filtros, op) {
+  const dc = state.demanda_cliente || [];
+  if (!dc.length) return { guiasExigidas: 0, mt3Exigidos: 0, hayDemanda: false };
+  // Nodos de la operación filtrados (mismo criterio que _capacidadOp)
+  const nodosOp = op === 'Canon' ? ['C_RM','C_VIÑA'] : ['R_VIÑA','R_SERENA'];
+  let nodosFiltrados = filtros.ceco ? nodosOp.filter(n => n === filtros.ceco) : nodosOp;
+  if (filtros.region) {
+    nodosFiltrados = nodosFiltrados.filter(n => (REGION_DE_NODO[n] || '') === filtros.region);
+  }
+  // Rango efectivo
+  const allRecs = applyFilters(buildUnifiedRecords(state), filtros);
+  const rango = rangoFechasFiltros(filtros, allRecs);
+  if (!rango) return { guiasExigidas: 0, mt3Exigidos: 0, hayDemanda: false };
+  // Iterar día por día. Solo días hábiles cuentan (consistente con _capacidadOp).
+  let totalGuias = 0, totalMt3 = 0, hayDemanda = false;
+  const dStart = new Date(rango.desde + 'T00:00:00');
+  const dEnd = new Date(rango.hasta + 'T00:00:00');
+  for (let d = new Date(dStart); d <= dEnd; d.setDate(d.getDate() + 1)) {
+    const fechaStr = d.toISOString().slice(0, 10);
+    if (!esDiaHabil(fechaStr, op)) continue;
+    nodosFiltrados.forEach(nodo => {
+      // Buscar todas las filas DC que matcheen (op, nodo) y cuyo rango cubra esta fecha
+      dc.forEach(row => {
+        if (row.operacion && row.operacion !== op) return;
+        if (row.nodo !== nodo) return;
+        if (!row.desde || !row.hasta) return;
+        if (fechaStr < row.desde || fechaStr > row.hasta) return;
+        totalGuias += row.guias_exigidas || 0;
+        totalMt3 += row.mt3_exigidos || 0;
+        hayDemanda = true;
+      });
+    });
+  }
+  return { guiasExigidas: totalGuias, mt3Exigidos: totalMt3, hayDemanda };
+}
+
 function _periodoAnterior(filtros, records) {
   const fechas = Array.from(new Set(records.map(r => r.fecha).filter(Boolean))).sort();
   if (!fechas.length) return null;
@@ -13526,6 +13565,52 @@ function renderOperaciones(state, filtros) {
         ${progBar(pctDias)}
         <div class="kpi-detail">${fmt(pctDias,1)}%</div>
       </div>
+      ${(function(){
+        const dem = _demandaClienteOp(state, filtros, op);
+        if (!dem.hayDemanda) {
+          return `
+            <div class="kpi-card ${color}" style="opacity:0.6">
+              <div class="kpi-label">% Cumplimiento demanda</div>
+              <div class="kpi-value" style="font-size:1rem;color:var(--text-dim)">Sin datos de demanda</div>
+              <div class="kpi-detail">Agrega filas en hoja "Demanda Cliente" del Maestro</div>
+            </div>
+            <div class="kpi-card ${color}" style="opacity:0.6">
+              <div class="kpi-label">% Ocupación vs cliente</div>
+              <div class="kpi-value" style="font-size:1rem;color:var(--text-dim)">Sin datos</div>
+              <div class="kpi-detail">–</div>
+            </div>
+            <div class="kpi-card ${color}" style="opacity:0.6">
+              <div class="kpi-label">Cobertura planta vs cliente</div>
+              <div class="kpi-value" style="font-size:1rem;color:var(--text-dim)">Sin datos</div>
+              <div class="kpi-detail">–</div>
+            </div>`;
+        }
+        // % Cumplimiento de demanda — guías despachadas / guías exigidas
+        const pctCumpl = dem.guiasExigidas > 0 ? (guiasUsadas / dem.guiasExigidas) * 100 : 0;
+        // % Ocupación vs cliente — m³ despachados / m³ exigidos
+        const pctOcupCli = dem.mt3Exigidos > 0 ? (k.mt3 / dem.mt3Exigidos) * 100 : 0;
+        // Cobertura planta vs cliente — cap planta / cap exigida (en m³)
+        const pctCobertura = dem.mt3Exigidos > 0 ? (cap.capMt3 / dem.mt3Exigidos) * 100 : 0;
+        return `
+          <div class="kpi-card ${color}">
+            <div class="kpi-label">% Cumplimiento demanda</div>
+            <div class="kpi-value" style="font-size:1.4rem">${fmt(guiasUsadas,0)} de ${fmt(dem.guiasExigidas,0)}</div>
+            ${progBar(Math.min(100, pctCumpl))}
+            <div class="kpi-detail">${fmt(pctCumpl,1)}% (guías despachadas / exigidas)</div>
+          </div>
+          <div class="kpi-card ${color}">
+            <div class="kpi-label">% Ocupación vs cliente</div>
+            <div class="kpi-value" style="font-size:1.4rem">${fmt(k.mt3,1)} de ${fmt(dem.mt3Exigidos,1)}</div>
+            ${progBar(Math.min(100, pctOcupCli))}
+            <div class="kpi-detail">${fmt(pctOcupCli,1)}% (m³ despachados / exigidos)</div>
+          </div>
+          <div class="kpi-card ${color}">
+            <div class="kpi-label">Cobertura planta vs cliente</div>
+            <div class="kpi-value" style="font-size:1.4rem">${fmt(cap.capMt3,1)} / ${fmt(dem.mt3Exigidos,1)}</div>
+            ${progBar(Math.min(100, pctCobertura))}
+            <div class="kpi-detail">${fmt(pctCobertura,1)}% (cap planta / cap exigida)</div>
+          </div>`;
+      })()}
     `;
   }
 
@@ -14467,6 +14552,22 @@ function actualizarMaestro(wb) {
       vehiculos: r['Vehiculos'], desp_total: r['Desp. Total'], mt3_total: r['MT3 Total'],
       desp_x_vehi: r['Cta. Desp x Vehi'], vol_x_vehi: r['Cta. Volumen x Vehi']
     }));
+  }
+  // Hoja Demanda Cliente (v15): capacidades exigidas por el mandante por rango de fechas
+  const sDC = wb.Sheets['Demanda Cliente'];
+  if (sDC) {
+    const rows = getRowsWithHeader(sDC, 0);
+    STATE.demanda_cliente = rows
+      .filter(r => r['Desde'] && r['Hasta'] && r['Nodo'])
+      .map(r => ({
+        desde: excelDateToISO(r['Desde']),
+        hasta: excelDateToISO(r['Hasta']),
+        operacion: String(r['Operación'] || '').trim(),
+        nodo: String(r['Nodo'] || '').trim(),
+        tipo: String(r['Tipo demanda'] || '').trim(),
+        guias_exigidas: toNum(r['Guías exigidas']),
+        mt3_exigidos: toNum(r['m³ exigidos'])
+      }));
   }
 }
 

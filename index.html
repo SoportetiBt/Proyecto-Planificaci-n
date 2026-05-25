@@ -13032,6 +13032,41 @@ function renderMiniChartResumen(canvasId, conf) {
   destroyChart(canvasId);
   const el = document.getElementById(canvasId);
   if (!el || el.offsetParent === null) return;
+  // Formato amigable de fecha (YYYY-MM-DD → "13 May")
+  const MES_ABREV_CHART = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const _fmtFecha = (s) => {
+    if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return s || '';
+    const [a, m, d] = s.split('-');
+    return parseInt(d, 10) + ' ' + MES_ABREV_CHART[parseInt(m, 10) - 1];
+  };
+  // Para los charts con serie diaria mostramos primera y última fecha en el eje X
+  const baseOptsTemporal = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { enabled: true, callbacks: { title: (items) => _fmtFecha(items[0] && items[0].label) } }
+    },
+    scales: {
+      x: {
+        display: true,
+        ticks: {
+          color: '#545454', font: { size: 9, family: 'Open Sans' },
+          autoSkip: false,
+          maxRotation: 0,
+          callback: function(val, idx, ticks) {
+            // Solo muestra primera y última etiqueta
+            if (idx === 0 || idx === ticks.length - 1) {
+              return _fmtFecha(this.getLabelForValue(val));
+            }
+            return '';
+          }
+        },
+        grid: { display: false }
+      },
+      y: { display: false }
+    }
+  };
   const baseOpts = {
     responsive: true,
     maintainAspectRatio: false,
@@ -13050,22 +13085,22 @@ function renderMiniChartResumen(canvasId, conf) {
   } else if (conf.type === 'spark') {
     CHARTS[canvasId] = new Chart(el, {
       type: 'line',
-      data: { labels: conf.labels || [], datasets: [{ data: conf.data || [], borderColor: conf.color || '#002E5D', backgroundColor: 'rgba(0,46,93,0.1)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] },
-      options: baseOpts
+      data: { labels: conf.labels || [], datasets: [{ label: '', data: conf.data || [], borderColor: conf.color || '#002E5D', backgroundColor: 'rgba(0,46,93,0.1)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] },
+      options: baseOptsTemporal
     });
   } else if (conf.type === 'sparkBar') {
     const colors = (conf.data || []).map(v => v >= (conf.avg || 0) ? (conf.color || '#002E5D') : '#94a3b8');
     CHARTS[canvasId] = new Chart(el, {
       type: 'bar',
-      data: { labels: conf.labels || [], datasets: [{ data: conf.data || [], backgroundColor: colors, borderWidth: 0 }] },
-      options: baseOpts
+      data: { labels: conf.labels || [], datasets: [{ label: '', data: conf.data || [], backgroundColor: colors, borderWidth: 0 }] },
+      options: baseOptsTemporal
     });
   } else if (conf.type === 'barsDay') {
     const colors = (conf.data || []).map(v => v > (conf.threshold || 100) ? '#C62828' : '#2E7D32');
     CHARTS[canvasId] = new Chart(el, {
       type: 'bar',
-      data: { labels: conf.labels || [], datasets: [{ data: conf.data || [], backgroundColor: colors, borderWidth: 0 }] },
-      options: baseOpts
+      data: { labels: conf.labels || [], datasets: [{ label: '', data: conf.data || [], backgroundColor: colors, borderWidth: 0 }] },
+      options: baseOptsTemporal
     });
   } else if (conf.type === 'hbarsNodo') {
     const nodos = Object.keys(conf.data || {}).sort();
@@ -13563,8 +13598,15 @@ function renderNodos(state, filtros) {
   });
 
   // Rango efectivo para calcular promedio diario en capacidad si hay rango
+  // Detecta cualquier rango (Desde/Hasta, Año, Mes, fechas múltiples cargadas)
   const rango = rangoFechasFiltros(filtros, records);
-  const tieneRango = !!(filtros.desde && filtros.hasta);
+  let diasEnRango = 1;
+  if (rango) {
+    const d1 = new Date(rango.desde + 'T00:00:00');
+    const d2 = new Date(rango.hasta + 'T00:00:00');
+    diasEnRango = Math.max(1, Math.floor((d2 - d1) / 86400000) + 1);
+  }
+  const tieneRango = diasEnRango > 1;
 
   const tbody = document.querySelector('#tablaNodos tbody');
   tbody.innerHTML = '';

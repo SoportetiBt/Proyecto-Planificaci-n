@@ -14022,9 +14022,11 @@ function renderVehiculos(state, filtros) {
     vehsTodos = vehsTodos.filter(v => String(v.tipo || '').toUpperCase() === fTipoVal);
   }
   if (fUsoVal) {
-    // Respeta vigencia: para cada vehículo usa el Uso de la fila vigente en SU fecha
+    // Respeta vigencia + nodo: la misma patente puede ser Planta en un nodo y Back UP en otro
     vehsTodos = vehsTodos.filter(v => {
-      const vig = getVehiculoVigente(state, v.patente, v.fecha);
+      const fechaRef = v.fecha || new Date().toISOString().slice(0, 10);
+      const vig = (v.ceco ? getVehiculoVigenteEnNodo(state, v.patente, v.ceco, fechaRef) : null)
+                  || getVehiculoVigente(state, v.patente, fechaRef);
       if (!vig) return false;
       return String(vig.uso || '').toLowerCase().includes(fUsoVal);
     });

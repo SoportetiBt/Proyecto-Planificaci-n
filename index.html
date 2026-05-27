@@ -12412,12 +12412,13 @@ function buildUnifiedRecords(state) {
       nro_f12: r.nro_f12, cliente: r.cliente, comuna: r.comuna,
     });
   });
-  // Canon RM + V detalle (por guía) — Canon NO tiene paquetes (guías = órdenes)
+  // Canon RM + V detalle (por guía). Cantidad real va en campo aparte (no paquetes).
   getCanonDetalle(state).forEach(r => {
     recs.push({
       fecha: r.fecha, operacion: 'Canon', ceco: r.ceco || 'C_RM',
       patente: r.patente, ordenes: 1, mt3: 0,
       paquetes: 0,
+      cantidad: toNum(r.cantidad),
       nro_f12: r.numero_guia, cliente: r.cliente || null, comuna: r.comuna || r.geocerca,
     });
   });
@@ -12998,8 +12999,10 @@ function renderKPIResumen(state, filtros) {
     if (filtros.ceco && r.ceco !== filtros.ceco) return;
     registrarBackup(r.fecha, r.ceco, r.patente);
   });
-  let backupsActivaciones = 0;
-  Object.values(backupsPorDiaNodo).forEach(s => backupsActivaciones += s.size);
+  // Total = patentes back-up DISTINTAS que operaron en el período (no activaciones por día)
+  const backupsUnicas = new Set();
+  Object.values(backupsPorDiaNodo).forEach(s => s.forEach(p => backupsUnicas.add(p)));
+  const backupsActivaciones = backupsUnicas.size;
   const backupsDrilldown = Object.keys(backupsPorNodo).sort()
     .map(n => `${n}: ${backupsPorNodo[n].size}`)
     .join(' · ');
@@ -13796,11 +13799,20 @@ function renderNodos(state, filtros) {
   // Agregar por nodo: mt3 usados, órdenes únicas, patentes citadas
   const porNodo = {};
   NODOS.forEach(n => { porNodo[n] = { mt3: 0, ord: new Set(), pat: new Set() }; });
+  // Llenado: además del Set global, guardar Set por día para calcular citación pp
+  NODOS.forEach(n => { porNodo[n].patPorDia = {}; });
   records.forEach(r => {
     if (!porNodo[r.ceco]) return; // omitir ATN_TIENDA y otros
     porNodo[r.ceco].mt3 += r.mt3 || 0;
     if (r.nro_f12) porNodo[r.ceco].ord.add(r.nro_f12);
-    if (esPatenteReal(r.patente)) porNodo[r.ceco].pat.add(String(r.patente).toUpperCase());
+    if (esPatenteReal(r.patente)) {
+      const p = String(r.patente).toUpperCase();
+      porNodo[r.ceco].pat.add(p);
+      if (r.fecha) {
+        if (!porNodo[r.ceco].patPorDia[r.fecha]) porNodo[r.ceco].patPorDia[r.fecha] = new Set();
+        porNodo[r.ceco].patPorDia[r.fecha].add(p);
+      }
+    }
   });
   getCanonVehiculos(state).forEach(r => {
     if (!passesDate(r, filtros)) return;
@@ -13810,7 +13822,14 @@ function renderNodos(state, filtros) {
     if (!porNodo[r.ceco]) return;
     porNodo[r.ceco].mt3 += toNum(r.capacidad_uno);
     if (r.num_guias) for (let i = 0; i < r.num_guias; i++) porNodo[r.ceco].ord.add(`canon-${r.patente}-${i}`);
-    if (esPatenteReal(r.patente)) porNodo[r.ceco].pat.add(String(r.patente).toUpperCase());
+    if (esPatenteReal(r.patente)) {
+      const p = String(r.patente).toUpperCase();
+      porNodo[r.ceco].pat.add(p);
+      if (r.fecha) {
+        if (!porNodo[r.ceco].patPorDia[r.fecha]) porNodo[r.ceco].patPorDia[r.fecha] = new Set();
+        porNodo[r.ceco].patPorDia[r.fecha].add(p);
+      }
+    }
   });
 
   // Rango efectivo (debe declararse ANTES de catTotales y NODOS.forEach que lo usan)
@@ -13881,12 +13900,16 @@ function renderNodos(state, filtros) {
     const finalPctG = guiaPlantaShow > 0 ? (guiasPlanShow / guiaPlantaShow) * 100 : 0;
     const finalPctM = mt3PlantaShow > 0 ? (mt3UsadoShow / mt3PlantaShow) * 100 : 0;
 
+    // Veh. Citados = promedio ponderado de citación diaria
+    const _patDias = Object.keys(data.patPorDia || {}).length;
+    const _patTotal = Object.values(data.patPorDia || {}).reduce((a, s) => a + s.size, 0);
+    const _vehCitadosPp = _patDias > 0 ? _patTotal / _patDias : data.pat.size;
     tbody.insertAdjacentHTML('beforeend', `
       <tr>
         <td><strong>${n}</strong></td>
         <td>${fmt(catTotales[n], 0)}</td>
         <td>${fmt(catPlanta[n], 0)}</td>
-        <td>${fmt(data.pat.size, 0)}</td>
+        <td>${fmt(_vehCitadosPp, 1)}</td>
         <td>${fmt(guiaPlantaShow, 0)}</td>
         <td>${fmt(guiasPlanShow, 0)}</td>
         <td>${fmt(finalPctG, 1)}%<div class="progress-bar"><div class="progress-fill ${progressClass(finalPctG)}" style="width:${Math.min(finalPctG, 100)}%"></div></div></td>
@@ -13999,11 +14022,12 @@ function renderVehiculos(state, filtros) {
     vehsTodos = vehsTodos.filter(v => String(v.tipo || '').toUpperCase() === fTipoVal);
   }
   if (fUsoVal) {
-    const cat = {};
-    (state.catalogo_vehiculos || []).forEach(c => {
-      if (c.patente) cat[String(c.patente).trim().toUpperCase()] = String(c.uso || '').toLowerCase();
+    // Respeta vigencia: para cada vehículo usa el Uso de la fila vigente en SU fecha
+    vehsTodos = vehsTodos.filter(v => {
+      const vig = getVehiculoVigente(state, v.patente, v.fecha);
+      if (!vig) return false;
+      return String(vig.uso || '').toLowerCase().includes(fUsoVal);
     });
-    vehsTodos = vehsTodos.filter(v => (cat[String(v.patente).trim().toUpperCase()] || '').includes(fUsoVal));
   }
 
   // Datalist cascadeable: solo patentes que pasen los filtros actuales (sin fPatente para no recursionar)
@@ -14151,11 +14175,19 @@ function renderHistorico(state, filtros) {
     const k = `${r.fecha}|${r.ceco}|Canon`;
     if (!dailyAgg[k]) dailyAgg[k] = { fecha: r.fecha, operacion: 'Canon', ceco: r.ceco, mt3: 0, ord: new Set(), pat: new Set() };
     dailyAgg[k].mt3 += toNum(r.capacidad_uno);
-    if (r.num_guias) for (let i = 0; i < r.num_guias; i++) dailyAgg[k].ord.add(`canon-${r.patente}-${i}`);
+    // Las órdenes Canon ya se cuentan desde el detalle (dailyRecs) — NO duplicar
     if (esPatenteReal(r.patente)) dailyAgg[k].pat.add(r.patente);
   });
+  // Helper para día de la semana (Lun, Mar, ...) a partir de fecha YYYY-MM-DD
+  const _DIAS_SEM_HIST = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  function _diaDeSemana(fechaStr) {
+    if (!fechaStr) return '';
+    const d = new Date(fechaStr + 'T00:00:00');
+    if (isNaN(d)) return '';
+    return _DIAS_SEM_HIST[d.getDay()];
+  }
   Object.values(dailyAgg).forEach(d => {
-    hist.push({ fecha: d.fecha, dia: null, operacion: d.operacion, ceco: d.ceco, vehiculos: d.pat.size, ordenes: d.ord.size, mt3: d.mt3 });
+    hist.push({ fecha: d.fecha, dia: _diaDeSemana(d.fecha), operacion: d.operacion, ceco: d.ceco, vehiculos: d.pat.size, ordenes: d.ord.size, mt3: d.mt3 });
   });
 
   // Aplicar filtros
@@ -14230,7 +14262,7 @@ function renderHistorico(state, filtros) {
     tbody.insertAdjacentHTML('beforeend', `
       <tr>
         <td>${r.fecha || '–'}</td>
-        <td>${r.dia || '–'}</td>
+        <td>${r.dia || (r.fecha ? ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'][new Date(r.fecha+'T00:00:00').getDay()] : '–')}</td>
         <td>${op ? `<span class="tag ${opTag}">${op}</span>` : '–'}</td>
         <td>${r.ceco || '–'}</td>
         <td>${fmt(r.vehiculos, 0)}</td>
@@ -14269,7 +14301,7 @@ function renderDetalle(state, filtros) {
         <td>${r.nro_f12 || '–'}</td>
         <td>${[r.cliente, r.comuna].filter(Boolean).join(' · ') || '–'}</td>
         <td>${fmt(r.mt3, 2)}</td>
-        <td>${fmt(r.paquetes, 0)}</td>
+        <td>${fmt(r.cantidad || r.paquetes, 0)}</td>
       </tr>
     `);
   });

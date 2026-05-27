@@ -12056,50 +12056,6 @@ function esPatenteReal(patente) {
 }
 
 // =========================================================
-// VIGENCIA TEMPORAL (Maestro con columnas Desde/Hasta)
-// =========================================================
-// Determina si una fila con .desde / .hasta cubre la fecha dada.
-// Desde vacío → vigente desde siempre. Hasta vacío → vigente hasta hoy/futuro.
-function _filaVigente(fila, fechaStr) {
-  if (!fila) return false;
-  if (!fechaStr) return true;
-  if (fila.desde && fechaStr < fila.desde) return false;
-  if (fila.hasta && fechaStr > fila.hasta) return false;
-  return true;
-}
-
-// Devuelve la fila de Capacidades vigente para un nodo en una fecha.
-// Si no hay fila vigente, retorna {} (cap = 0).
-function getCapacidadVigente(state, nodo, fechaStr) {
-  const hist = state.capacidades_nodos_historico || [];
-  if (hist.length) {
-    const match = hist.find(f => f.nodo === nodo && _filaVigente(f, fechaStr));
-    if (match) return match;
-    // Fallback: si no hay fila vigente, usar la más reciente que matchee al nodo (o {})
-    const anteriores = hist.filter(f => f.nodo === nodo && (!f.desde || f.desde <= fechaStr)).sort((a,b) => (a.desde||'').localeCompare(b.desde||''));
-    if (anteriores.length) return anteriores[anteriores.length - 1];
-    return {};
-  }
-  // Sin historial (legacy): usar capacidades_nodos como objeto
-  return (state.capacidades_nodos || {})[nodo] || {};
-}
-
-// Devuelve la fila del catálogo vigente para una patente en una fecha.
-function getVehiculoVigente(state, patente, fechaStr) {
-  if (!patente) return null;
-  const p = String(patente).trim().toUpperCase();
-  const filas = (state.catalogo_vehiculos || []).filter(v =>
-    String(v.patente || '').trim().toUpperCase() === p
-  );
-  if (!filas.length) return null;
-  const vigente = filas.find(f => _filaVigente(f, fechaStr));
-  if (vigente) return vigente;
-  // Fallback: la más reciente
-  const ordenadas = filas.slice().sort((a,b) => (a.desde||'').localeCompare(b.desde||''));
-  return ordenadas[ordenadas.length - 1];
-}
-
-// =========================================================
 // CALENDARIO HÁBIL CHILE (feriados oficiales)
 // =========================================================
 const FERIADOS_CHILE = new Set([
@@ -12418,7 +12374,7 @@ function buildUnifiedRecords(state) {
       fecha: r.fecha, operacion: 'Canon', ceco: r.ceco || 'C_RM',
       patente: r.patente, ordenes: 1, mt3: 0,
       paquetes: 0,
-      nro_f12: r.numero_guia, cliente: r.cliente || null, comuna: r.comuna || r.geocerca,
+      nro_f12: r.numero_guia, cliente: null, comuna: r.comuna || r.geocerca,
     });
   });
   return recs;
@@ -12765,7 +12721,7 @@ function buildGuiasPorDiaNodo(state, filtros, recordsPre) {
   // Rosen: contar nro_f12 únicos por (fecha, nodo)
   recs.forEach(r => {
     if (!r.fecha || !r.ceco || !r.nro_f12) return;
-    const cap = getCapacidadVigente(state, r.ceco, r.fecha);
+    const cap = (state.capacidades_nodos || {})[r.ceco];
     if (!cap || !cap.guia_planta) return;
     const k = `${r.fecha}|${r.ceco}`;
     if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, _guias: new Set(), _canon: 0, planta: cap.guia_planta };
@@ -12778,7 +12734,7 @@ function buildGuiasPorDiaNodo(state, filtros, recordsPre) {
     if (filtros.region && (REGION_DE_NODO[r.ceco]||'') !== filtros.region) return;
     if (filtros.ceco && r.ceco !== filtros.ceco) return;
     if (!r.fecha || !r.ceco) return;
-    const cap = getCapacidadVigente(state, r.ceco, r.fecha);
+    const cap = (state.capacidades_nodos || {})[r.ceco];
     if (!cap || !cap.guia_planta) return;
     const k = `${r.fecha}|${r.ceco}`;
     if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, _guias: new Set(), _canon: 0, planta: cap.guia_planta };
@@ -12795,7 +12751,7 @@ function buildOcupPorDiaNodo(state, filtros, recordsPre) {
   const recs = recordsPre || applyFilters(buildUnifiedRecords(state), filtros);
   recs.forEach(r => {
     if (!r.fecha || !r.ceco) return;
-    const cap = getCapacidadVigente(state, r.ceco, r.fecha);
+    const cap = (state.capacidades_nodos || {})[r.ceco];
     if (!cap || !cap.mt3_planta) return;
     const k = `${r.fecha}|${r.ceco}`;
     if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, usado: 0, planta: cap.mt3_planta };
@@ -12808,7 +12764,7 @@ function buildOcupPorDiaNodo(state, filtros, recordsPre) {
     if (filtros.region && (REGION_DE_NODO[r.ceco]||'') !== filtros.region) return;
     if (filtros.ceco && r.ceco !== filtros.ceco) return;
     if (!r.fecha || !r.ceco) return;
-    const cap = getCapacidadVigente(state, r.ceco, r.fecha);
+    const cap = (state.capacidades_nodos || {})[r.ceco];
     if (!cap || !cap.mt3_planta) return;
     const k = `${r.fecha}|${r.ceco}`;
     if (!map[k]) map[k] = { fecha: r.fecha, nodo: r.ceco, usado: 0, planta: cap.mt3_planta };
@@ -12966,15 +12922,20 @@ function renderKPIResumen(state, filtros) {
   // Drilldown: se cuenta en el NODO QUE RECIBIÓ la patente.
   // Total activaciones = suma de patentes back-up distintas por día-nodo.
   // ============================================
-  // esBackup ahora respeta la VIGENCIA del catálogo a la fecha del registro
-  function esBackup(patente, cecoOperando, fechaStr) {
+  const catUso = {};        // patente → 'back' / 'planta' / ''
+  const catNodoAsig = {};   // patente → nodo asignado
+  (state.catalogo_vehiculos || []).forEach(v => {
+    if (!v.patente) return;
+    const p = String(v.patente).trim().toUpperCase();
+    catUso[p] = String(v.uso || '').toLowerCase();
+    if (v.operacion) catNodoAsig[p] = String(v.operacion).trim();
+  });
+  function esBackup(patente, cecoOperando) {
     if (!patente || !cecoOperando) return false;
-    const vig = getVehiculoVigente(state, patente, fechaStr || new Date().toISOString().slice(0, 10));
-    if (!vig) return false;
-    const uso = String(vig.uso || '').toLowerCase();
-    const nodoAsig = String(vig.operacion || '').trim();
+    const p = String(patente).trim().toUpperCase();
+    const uso = catUso[p] || '';
     if (uso.includes('back')) return true;                                       // caso A
-    if (uso.includes('planta') && nodoAsig && nodoAsig !== cecoOperando) return true; // caso B
+    if (uso.includes('planta') && catNodoAsig[p] && catNodoAsig[p] !== cecoOperando) return true; // caso B
     return false;
   }
   const backupsPorDiaNodo = {};
@@ -12982,7 +12943,7 @@ function renderKPIResumen(state, filtros) {
   function registrarBackup(fecha, ceco, patente) {
     if (!fecha || !ceco || !patente) return;
     if (!esPatenteReal(patente)) return;
-    if (!esBackup(patente, ceco, fecha)) return;
+    if (!esBackup(patente, ceco)) return;
     const p = String(patente).trim().toUpperCase();
     const k = `${fecha}|${ceco}`;
     if (!backupsPorDiaNodo[k]) backupsPorDiaNodo[k] = new Set();
@@ -13045,7 +13006,7 @@ function renderKPIResumen(state, filtros) {
     if (set.size > maxCit.count) {
       const [fecha, nodo] = k.split('|');
       let planta = 0, backup = 0;
-      set.forEach(p => { if (esBackup(p, nodo, fecha)) backup++; else planta++; });
+      set.forEach(p => { if (esBackup(p, nodo)) backup++; else planta++; });
       maxCit = { count: set.size, fecha, nodo, planta, backup };
     }
   });
@@ -13441,25 +13402,21 @@ function _capacidadOp(state, filtros, op) {
   // Nodos de la operación
   const nodosOp = op === 'Canon' ? ['C_RM','C_VIÑA'] : ['R_VIÑA','R_SERENA'];
   const nodosFiltrados = filtros.ceco ? nodosOp.filter(n => n === filtros.ceco) : nodosOp;
+  // Capacidades diarias por nodo (del Maestro)
+  let guiaPlantaSum = 0, mt3PlantaSum = 0;
+  nodosFiltrados.forEach(n => {
+    const cap = (state.capacidades_nodos || {})[n] || {};
+    guiaPlantaSum += toNum(cap.guia_planta);
+    mt3PlantaSum += toNum(cap.mt3_planta);
+  });
   // Rango efectivo del período filtrado
   const allRecs = applyFilters(buildUnifiedRecords(state), filtros);
   const rango = rangoFechasFiltros(filtros, allRecs);
   let diasHab = 0;
-  let capGuias = 0, capMt3 = 0;
-  if (rango) {
-    const dA = new Date(rango.desde + 'T00:00:00');
-    const dB = new Date(rango.hasta + 'T00:00:00');
-    for (let d = new Date(dA); d <= dB; d.setDate(d.getDate() + 1)) {
-      const fs = d.toISOString().slice(0, 10);
-      if (!esDiaHabil(fs, op)) continue;
-      diasHab++;
-      nodosFiltrados.forEach(n => {
-        const c = getCapacidadVigente(state, n, fs);
-        capGuias += toNum(c.guia_planta);
-        capMt3 += toNum(c.mt3_planta);
-      });
-    }
-  }
+  if (rango) diasHab = diasHabilesEnRango(op, rango.desde, rango.hasta);
+  // Capacidad total del período
+  const capGuias = guiaPlantaSum * diasHab;
+  const capMt3 = mt3PlantaSum * diasHab;
   // Días efectivamente trabajados (fechas distintas que SON hábiles para la operación)
   const fechasOp = new Set();
   recs.forEach(r => { if (r.fecha && esDiaHabil(r.fecha, op)) fechasOp.add(r.fecha); });
@@ -13813,24 +13770,16 @@ function renderNodos(state, filtros) {
     if (esPatenteReal(r.patente)) porNodo[r.ceco].pat.add(String(r.patente).toUpperCase());
   });
 
-  // Vehículos totales y planta del catálogo (por nodo asignado y vigentes en el rango)
-  const fechaRefVeh = (tieneRango && rango) ? rango.hasta : new Date().toISOString().slice(0, 10);
-  const catTotales = {};
-  const catPlanta = {};
+  // Vehículos totales y planta del catálogo (por nodo asignado en columna Operación)
+  const catTotales = {};   // nodo → total vehículos
+  const catPlanta = {};    // nodo → vehículos Planta
   NODOS.forEach(n => { catTotales[n] = 0; catPlanta[n] = 0; });
-  // Tomar patentes únicas vigentes a la fecha de referencia
-  const patentesVistas = new Set();
   (state.catalogo_vehiculos || []).forEach(v => {
     if (!esPatenteReal(v.patente)) return;
-    const p = String(v.patente).trim().toUpperCase();
-    if (patentesVistas.has(p)) return;
-    const vig = getVehiculoVigente(state, p, fechaRefVeh);
-    if (!vig) return;
-    patentesVistas.add(p);
-    const nodoAsig = String(vig.operacion || '').trim();
+    const nodoAsig = String(v.operacion || '').trim();
     if (!NODOS.includes(nodoAsig)) return;
     catTotales[nodoAsig]++;
-    const uso = String(vig.uso || '').toLowerCase();
+    const uso = String(v.uso || '').toLowerCase();
     if (uso.includes('planta')) catPlanta[nodoAsig]++;
   });
 
@@ -13856,36 +13805,16 @@ function renderNodos(state, filtros) {
   const chartMt3Usados = [];
 
   NODOS.forEach(n => {
+    const cap = (state.capacidades_nodos || {})[n] || {};
     const data = porNodo[n];
-    const op = n.startsWith('C_') ? 'Canon' : 'Rosen';
-    const diasHab = tieneRango ? diasHabilesEnRango(op, rango.desde, rango.hasta) : 1;
-    // Para vigencia por fila: calcular cap diaria promedio del rango (suma de cap vigente por día hábil / días hábiles)
-    let sumGuiaPlanta = 0, sumMt3Planta = 0, diasCount = 0;
-    if (tieneRango && rango) {
-      const dA = new Date(rango.desde + 'T00:00:00');
-      const dB = new Date(rango.hasta + 'T00:00:00');
-      for (let d = new Date(dA); d <= dB; d.setDate(d.getDate() + 1)) {
-        const fs = d.toISOString().slice(0, 10);
-        if (!esDiaHabil(fs, op)) continue;
-        const c = getCapacidadVigente(state, n, fs);
-        sumGuiaPlanta += toNum(c.guia_planta);
-        sumMt3Planta += toNum(c.mt3_planta);
-        diasCount++;
-      }
-    } else {
-      // Sin rango: usar fila vigente para hoy
-      const hoy = new Date().toISOString().slice(0, 10);
-      const c = getCapacidadVigente(state, n, hoy);
-      sumGuiaPlanta = toNum(c.guia_planta);
-      sumMt3Planta = toNum(c.mt3_planta);
-      diasCount = 1;
-    }
-    const cap = getCapacidadVigente(state, n, tieneRango && rango ? rango.hasta : new Date().toISOString().slice(0, 10));
     const pctG = pct(data.ord.size, cap.guia_planta);
     const pctM = pct(data.mt3, cap.mt3_planta);
-    // Capacidad pp = promedio diario en el rango
-    const guiaPlantaShow = diasCount > 0 ? sumGuiaPlanta / diasCount : toNum(cap.guia_planta);
-    const mt3PlantaShow = diasCount > 0 ? sumMt3Planta / diasCount : toNum(cap.mt3_planta);
+    const op = n.startsWith('C_') ? 'Canon' : 'Rosen';
+    const diasHab = tieneRango ? diasHabilesEnRango(op, rango.desde, rango.hasta) : 1;
+    // Cuando hay rango: mostrar TODAS las cifras como promedio diario (pp)
+    // Capacidad pp = capacidad diaria del Maestro (estática, no multiplicada por días)
+    const guiaPlantaShow = toNum(cap.guia_planta);
+    const mt3PlantaShow = toNum(cap.mt3_planta);
     // Citado/usado pp = total del período / días hábiles
     const guiasPlanShow = tieneRango && diasHab > 0 ? (data.ord.size / diasHab) : data.ord.size;
     const mt3UsadoShow = tieneRango && diasHab > 0 ? (data.mt3 / diasHab) : data.mt3;
@@ -14513,26 +14442,13 @@ function procesarCanon(workbook, region, ceco, fechaDef, log) {
   const sD = workbook.Sheets['Formato por defecto lastmile'] || workbook.Sheets[workbook.SheetNames.find(s => s.toLowerCase().includes('lastmile'))];
   if (sD) {
     const rows = getRowsWithHeader(sD, 0);
-    // Extrae la comuna del string de dirección. Formato esperado: "Calle 123, Comuna, Región".
-    function _comunaDeDireccion(dir) {
-      if (!dir) return null;
-      const parts = String(dir).split(',').map(s => s.trim()).filter(Boolean);
-      if (parts.length < 2) return null;
-      return parts[1];
-    }
-    out.detalle = rows.filter(r => r['Numero guia']).map(r => {
-      const comunaExpl = r['Comuna'];
-      const comunaDir = !comunaExpl ? _comunaDeDireccion(r['Dirección'] || r['Direccion']) : null;
-      return {
-        operacion: 'Canon', region: region, ceco: ceco, fecha: fechaDef,
-        patente: r['Vehiculo'] ? String(r['Vehiculo']).trim().toUpperCase() : null,
-        numero_guia: r['Numero guia'], cantidad: toNum(r['Cantidad']),
-        geocerca: r['Geocerca'], tipo_ruta: r['tipo de ruta'],
-        comuna: comunaExpl || comunaDir || r['Geocerca'],
-        cliente: r['Nombre de contacto'] || null,
-        direccion: r['Dirección'] || r['Direccion'] || null,
-      };
-    });
+    out.detalle = rows.filter(r => r['Numero guia']).map(r => ({
+      operacion: 'Canon', region: region, ceco: ceco, fecha: fechaDef,
+      patente: r['Vehiculo'] ? String(r['Vehiculo']).trim().toUpperCase() : null,
+      numero_guia: r['Numero guia'], cantidad: toNum(r['Cantidad']),
+      geocerca: r['Geocerca'], tipo_ruta: r['tipo de ruta'],
+      comuna: r['Comuna'] || r['Geocerca'],
+    }));
   }
   return out;
 }
@@ -14610,28 +14526,13 @@ function actualizarMaestro(wb) {
   if (sCap) {
     const rows = XLSX.utils.sheet_to_json(sCap, { header: 1, defval: null });
     const NODOS = new Set(['R_VIÑA', 'R_SERENA', 'C_VIÑA', 'C_RM']);
-    // Reset historial + compat objeto
-    STATE.capacidades_nodos = {};
-    STATE.capacidades_nodos_historico = [];
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = 1; i < 6 && i < rows.length; i++) {
       const row = rows[i];
       if (row && typeof row[0] === 'string' && NODOS.has(row[0].trim())) {
-        const nodo = row[0].trim();
-        const fila = {
-          nodo,
+        STATE.capacidades_nodos[row[0].trim()] = {
           vehiculos_total: row[1], vehiculos_planta: row[2], vehiculos_back_up: row[3],
-          guia_planta: row[4], guia_max: row[5], mt3_planta: row[6], mt3_max: row[7],
-          desde: excelDateToISO(row[8]) || null,
-          hasta: excelDateToISO(row[9]) || null
+          guia_planta: row[4], guia_max: row[5], mt3_planta: row[6], mt3_max: row[7]
         };
-        STATE.capacidades_nodos_historico.push(fila);
-        // Para compatibilidad: state.capacidades_nodos[nodo] queda con la fila vigente para HOY
-        // (o la más reciente si no hay vigente)
-        const hoyISO = new Date().toISOString().slice(0, 10);
-        const esVigenteHoy = (!fila.desde || fila.desde <= hoyISO) && (!fila.hasta || fila.hasta >= hoyISO);
-        if (esVigenteHoy || !STATE.capacidades_nodos[nodo]) {
-          STATE.capacidades_nodos[nodo] = fila;
-        }
       }
     }
   }
@@ -14641,9 +14542,7 @@ function actualizarMaestro(wb) {
     STATE.catalogo_vehiculos = rows.filter(r => r['Patente']).map(r => ({
       patente: String(r['Patente']).trim().toUpperCase(),
       mt3: r['MT3'], kilos: r['Kilos'], tipo: r['Tipo'],
-      operacion: r['Operación'], uso: r['Uso'],
-      desde: excelDateToISO(r['Desde']) || null,
-      hasta: excelDateToISO(r['Hasta']) || null
+      operacion: r['Operación'], uso: r['Uso']
     }));
   }
   const sB = wb.Sheets['Base'];

@@ -13823,24 +13823,15 @@ function renderNodos(state, filtros) {
   }
   const tieneRango = diasEnRango > 1;
 
-  // Vehículos totales y planta del catálogo (por nodo asignado y vigentes en el rango)
+  // Vehículos totales y planta directos de Capacidades Centros (fila vigente al rango filtrado)
+  // Si hay rango → usar capacidades vigentes para el rango.hasta. Sin rango → usar hoy.
   const fechaRefVeh = (tieneRango && rango) ? rango.hasta : new Date().toISOString().slice(0, 10);
   const catTotales = {};
   const catPlanta = {};
-  NODOS.forEach(n => { catTotales[n] = 0; catPlanta[n] = 0; });
-  const patentesVistas = new Set();
-  (state.catalogo_vehiculos || []).forEach(v => {
-    if (!esPatenteReal(v.patente)) return;
-    const p = String(v.patente).trim().toUpperCase();
-    if (patentesVistas.has(p)) return;
-    const vig = getVehiculoVigente(state, p, fechaRefVeh);
-    if (!vig) return;
-    patentesVistas.add(p);
-    const nodoAsig = String(vig.operacion || '').trim();
-    if (!NODOS.includes(nodoAsig)) return;
-    catTotales[nodoAsig]++;
-    const uso = String(vig.uso || '').toLowerCase();
-    if (uso.includes('planta')) catPlanta[nodoAsig]++;
+  NODOS.forEach(n => {
+    const capRef = getCapacidadVigente(state, n, fechaRefVeh);
+    catTotales[n] = toNum(capRef.vehiculos_total);
+    catPlanta[n] = toNum(capRef.vehiculos_planta);
   });
 
   const tbody = document.querySelector('#tablaNodos tbody');

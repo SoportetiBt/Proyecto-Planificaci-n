@@ -12094,9 +12094,40 @@ function getVehiculoVigente(state, patente, fechaStr) {
   if (!filas.length) return null;
   const vigente = filas.find(f => _filaVigente(f, fechaStr));
   if (vigente) return vigente;
-  // Fallback: la más reciente
   const ordenadas = filas.slice().sort((a,b) => (a.desde||'').localeCompare(b.desde||''));
   return ordenadas[ordenadas.length - 1];
+}
+
+// Fila del catálogo para una patente operando en un nodo específico (con vigencia)
+function getVehiculoVigenteEnNodo(state, patente, nodo, fechaStr) {
+  if (!patente || !nodo) return null;
+  const p = String(patente).trim().toUpperCase();
+  const filas = (state.catalogo_vehiculos || []).filter(v =>
+    String(v.patente || '').trim().toUpperCase() === p &&
+    String(v.operacion || '').trim() === nodo
+  );
+  if (!filas.length) return null;
+  const vig = filas.find(f => _filaVigente(f, fechaStr));
+  if (vig) return vig;
+  const ord = filas.slice().sort((a,b) => (a.desde||'').localeCompare(b.desde||''));
+  return ord[ord.length - 1];
+}
+
+// Determina si una patente actúa como Back UP en (nodo, fecha) — caso A o caso B.
+function esBackupContextual(state, patente, cecoOperando, fechaStr) {
+  if (!patente || !cecoOperando) return false;
+  const fecha = fechaStr || new Date().toISOString().slice(0, 10);
+  const vigNodo = getVehiculoVigenteEnNodo(state, patente, cecoOperando, fecha);
+  if (vigNodo) {
+    return String(vigNodo.uso || '').toLowerCase().includes('back');
+  }
+  const vig = getVehiculoVigente(state, patente, fecha);
+  if (!vig) return false;
+  const uso = String(vig.uso || '').toLowerCase();
+  const nodoAsig = String(vig.operacion || '').trim();
+  if (uso.includes('back')) return true;
+  if (uso.includes('planta') && nodoAsig && nodoAsig !== cecoOperando) return true;
+  return false;
 }
 
 // =========================================================
@@ -13821,7 +13852,7 @@ function renderNodos(state, filtros) {
     if (filtros.ceco && r.ceco !== filtros.ceco) return;
     if (!porNodo[r.ceco]) return;
     porNodo[r.ceco].mt3 += toNum(r.capacidad_uno);
-    if (r.num_guias) for (let i = 0; i < r.num_guias; i++) porNodo[r.ceco].ord.add(`canon-${r.patente}-${i}`);
+    // Órdenes Canon NO se duplican: ya vienen del detalle (records arriba)
     if (esPatenteReal(r.patente)) {
       const p = String(r.patente).toUpperCase();
       porNodo[r.ceco].pat.add(p);
@@ -14022,13 +14053,13 @@ function renderVehiculos(state, filtros) {
     vehsTodos = vehsTodos.filter(v => String(v.tipo || '').toUpperCase() === fTipoVal);
   }
   if (fUsoVal) {
-    // Respeta vigencia + nodo: la misma patente puede ser Planta en un nodo y Back UP en otro
+    // Considera el contexto operacional: una patente Planta operando en nodo distinto = Back UP (caso B)
     vehsTodos = vehsTodos.filter(v => {
       const fechaRef = v.fecha || new Date().toISOString().slice(0, 10);
-      const vig = (v.ceco ? getVehiculoVigenteEnNodo(state, v.patente, v.ceco, fechaRef) : null)
-                  || getVehiculoVigente(state, v.patente, fechaRef);
-      if (!vig) return false;
-      return String(vig.uso || '').toLowerCase().includes(fUsoVal);
+      const esBack = esBackupContextual(state, v.patente, v.ceco, fechaRef);
+      if (fUsoVal === 'back') return esBack;
+      if (fUsoVal === 'planta') return !esBack;
+      return true;
     });
   }
 
@@ -14163,8 +14194,8 @@ function renderHistorico(state, filtros) {
   // Se descarta state.historico_maestro (hoja Base del Maestro consolidado).
   let hist = [];
 
-  // Añadir planificación diaria como filas históricas
-  const dailyRecs = buildUnifiedRecords(state);
+  // Añadir planificación diaria como filas históricas (sin ATN_TIENDA — solo en Resumen)
+  const dailyRecs = buildUnifiedRecords(state).filter(r => r.ceco !== 'ATN_TIENDA');
   const dailyAgg = {};
   dailyRecs.forEach(r => {
     const k = `${r.fecha}|${r.ceco}|${r.operacion}`;
@@ -14282,8 +14313,8 @@ function renderHistorico(state, filtros) {
 // =========================================================
 function renderDetalle(state, filtros) {
   let records = applyFilters(buildUnifiedRecords(state), filtros);
-  // Excluir pseudo-patentes (regla global)
-  records = records.filter(r => !r.patente || esPatenteReal(r.patente));
+  // Excluir pseudo-patentes (regla global) y ATN_TIENDA (solo aparece en Resumen)
+  records = records.filter(r => (!r.patente || esPatenteReal(r.patente)) && r.ceco !== 'ATN_TIENDA');
   // Filtro de búsqueda por número de orden
   const fOrdenVal = (document.getElementById('fOrden') || {}).value || '';
   if (fOrdenVal.trim()) {
@@ -14501,7 +14532,14 @@ function procesarRosen(workbook, region, fechaDef, log) {
       chofer: idx['Chofer'] !== undefined ? row[idx['Chofer']] : null,
       hr: idx['HR'] !== undefined ? row[idx['HR']] : null,
       cantidad: idx['Cantidad Ruta'] !== undefined ? toNum(row[idx['Cantidad Ruta']]) : 0,
-      volumen: idx['Volumen'] !== undefined ? toNum(row[idx['Volumen']]) : 0,
+      volumen: (function(){
+        // Prioridad: Volumen ajustado, Columna1, __EMPTY (col vacía), Volumen estándar
+        if (idx['Volumen ajustado'] !== undefined) return toNum(row[idx['Volumen ajustado']]);
+        if (idx['Columna1'] !== undefined) return toNum(row[idx['Columna1']]);
+        if (idx['__EMPTY'] !== undefined) return toNum(row[idx['__EMPTY']]);
+        if (idx['Volumen'] !== undefined) return toNum(row[idx['Volumen']]);
+        return 0;
+      })(),
       volumen_ajustado: idx['Columna2'] !== undefined ? toNum(row[idx['Columna2']]) : 0,
       fecha: (idx['F.H Entrega'] !== undefined ? excelDateToISO(row[idx['F.H Entrega']]) : null) || fechaDef,
     });

@@ -14227,6 +14227,7 @@ function renderHistorico(state, filtros) {
   hist = hist.filter(r => {
     if (!passesDate(r, filtros)) return false;
     if (filtros.operacion && r.operacion !== filtros.operacion) return false;
+    if (filtros.region && (REGION_DE_NODO[r.ceco] || '') !== filtros.region) return false;
     if (filtros.ceco && r.ceco !== filtros.ceco) return false;
     return true;
   });
@@ -14533,7 +14534,10 @@ function procesarRosen(workbook, region, fechaDef, log) {
       hr: idx['HR'] !== undefined ? row[idx['HR']] : null,
       cantidad: idx['Cantidad Ruta'] !== undefined ? toNum(row[idx['Cantidad Ruta']]) : 0,
       volumen: (function(){
-        // Prioridad: Volumen ajustado, Columna1, __EMPTY (col vacía), Volumen estándar
+        // Volumen ajustado: prioridad por POSICIÓN (columna S = índice 18) + headers como fallback
+        const COL_VOL_AJUSTADO = 18; // columna S
+        const valS = row[COL_VOL_AJUSTADO];
+        if (valS !== null && valS !== undefined && valS !== '') return toNum(valS);
         if (idx['Volumen ajustado'] !== undefined) return toNum(row[idx['Volumen ajustado']]);
         if (idx['Columna1'] !== undefined) return toNum(row[idx['Columna1']]);
         if (idx['__EMPTY'] !== undefined) return toNum(row[idx['__EMPTY']]);

@@ -14247,14 +14247,20 @@ function renderHistorico(state, filtros) {
   // KPIs
   const mt3Tot = hist.reduce((a, b) => a + (b.mt3 || 0), 0);
   const ordTot = hist.reduce((a, b) => a + (b.ordenes || 0), 0);
+  const vehDiaTot = hist.reduce((a, b) => a + (b.vehiculos || 0), 0);
   const nMeses = Object.keys(porMes).length;
   const nSems = Object.keys(porSem).length;
   const nDias = Object.keys(porDia).length;
+  // pp = promedio ponderado: Σ valor / Σ vehículos-día
+  const mt3PorVehPp = vehDiaTot ? mt3Tot / vehDiaTot : 0;
+  const ordPorVehPp = vehDiaTot ? ordTot / vehDiaTot : 0;
   document.getElementById('kpiHistorico').innerHTML = `
     <div class="kpi-card"><div class="kpi-label">m³ totales (histórico)</div><div class="kpi-value">${fmt(mt3Tot,0)}</div><div class="kpi-detail">${nDias} días registrados</div></div>
     <div class="kpi-card success"><div class="kpi-label">Órdenes totales</div><div class="kpi-value">${fmt(ordTot,0)}</div></div>
     <div class="kpi-card warning"><div class="kpi-label">Promedio m³/día</div><div class="kpi-value">${fmt(nDias ? mt3Tot/nDias : 0,1)}</div></div>
     <div class="kpi-card"><div class="kpi-label">Promedio órdenes/día</div><div class="kpi-value">${fmt(nDias ? ordTot/nDias : 0,0)}</div></div>
+    <div class="kpi-card"><div class="kpi-label">m³ / vehículo pp</div><div class="kpi-value">${fmt(mt3PorVehPp,2)}</div><div class="kpi-detail">${fmt(vehDiaTot,0)} vehículos-día</div></div>
+    <div class="kpi-card success"><div class="kpi-label">Guías / vehículo pp</div><div class="kpi-value">${fmt(ordPorVehPp,1)}</div><div class="kpi-detail">${fmt(vehDiaTot,0)} vehículos-día</div></div>
   `;
 
   // Charts

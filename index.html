@@ -12447,7 +12447,8 @@ function buildUnifiedRecords(state) {
   getCanonDetalle(state).forEach(r => {
     recs.push({
       fecha: r.fecha, operacion: 'Canon', ceco: r.ceco || 'C_RM',
-      patente: r.patente, ordenes: 1, mt3: 0,
+      patente: r.patente, ordenes: 1, mt3: 0,   // mt3 = 0 a propósito (los totales vienen del Resumen por vehículo)
+      mt3_guia: toNum(r.mt3_guia),               // m³ de la guía individual (sólo para mostrar en Detalle Órdenes)
       paquetes: 0,
       cantidad: toNum(r.cantidad),
       nro_f12: r.numero_guia, cliente: r.cliente || null, comuna: r.comuna || r.geocerca,
@@ -14334,7 +14335,7 @@ function renderDetalle(state, filtros) {
         <td>${r.patente || '–'}</td>
         <td>${r.nro_f12 || '–'}</td>
         <td>${[r.cliente, r.comuna].filter(Boolean).join(' · ') || '–'}</td>
-        <td>${fmt(r.mt3, 2)}</td>
+        <td>${fmt(r.mt3_guia || r.mt3, 2)}</td>
         <td>${fmt(r.cantidad || r.paquetes, 0)}</td>
       </tr>
     `);

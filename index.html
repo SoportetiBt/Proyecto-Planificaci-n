@@ -14575,43 +14575,83 @@ function procesarCanon(workbook, region, ceco, fechaDef, log) {
   } else log('  No se encontró hoja Resumen por vehículo', 'error');
 
   // Detalle (formato por defecto lastmile)
-  // Prioridad de hojas para el detalle: "Detalle del Plan" → "Formato por defecto lastmile" → cualquiera con lastmile
-  let sD = workbook.Sheets['Detalle del Plan'] || workbook.Sheets['Detalle del plan'] || workbook.Sheets['Formato por defecto lastmile'];
-  if (!sD) {
-    const sName = workbook.SheetNames.find(s => {
-      const l = s.toLowerCase();
-      return l.includes('detalle') && l.includes('plan');
-    }) || workbook.SheetNames.find(s => s.toLowerCase().includes('lastmile'));
-    if (sName) sD = workbook.Sheets[sName];
+  // Detalle Canon: cruza 2 hojas
+  //   "Detalle del plan" (formato nuevo) → patente (B), dirección (E), m³ guía (H), número guía (J)
+  //   "Formato por defecto lastmile" (formato lastmile) → cliente (col G "Nombre contacto") y cantidad (col D)
+  //   Se cruzan por número de guía.
+  const sDP = workbook.Sheets['Detalle del Plan'] || workbook.Sheets['Detalle del plan'];
+  const sFL = workbook.Sheets['Formato por defecto lastmile']
+            || workbook.Sheets[workbook.SheetNames.find(s => s.toLowerCase().includes('lastmile')) || ''];
+
+  // Extrae comuna desde el string de Dirección: toma la PENÚLTIMA parte (Dirección, Comuna, Región)
+  function _comunaDeDireccion(dir) {
+    if (!dir) return null;
+    const parts = String(dir).split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    return parts[parts.length - 2];
   }
-  if (sD) {
-    const rows = getRowsWithHeader(sD, 0);
-    // Extrae la comuna del string de dirección leyendo DESDE ATRÁS.
-    // Formato típico: "Calle 123, [Casa N], Comuna, Región" — comuna = penúltima parte.
-    function _comunaDeDireccion(dir) {
-      if (!dir) return null;
-      const parts = String(dir).split(',').map(s => s.trim()).filter(Boolean);
-      if (parts.length < 2) return null;
-      // Penúltima (índice -2): si hay 2 partes → primera; si hay 3+ → la segunda desde atrás
-      return parts[parts.length - 2];
+
+  // Construir map de (Numero guia) → { cliente, cantidad } desde "Formato por defecto lastmile"
+  const mapFL = {};
+  if (sFL) {
+    const matrizFL = XLSX.utils.sheet_to_json(sFL, { header: 1, defval: null, blankrows: false });
+    for (let i = 1; i < matrizFL.length; i++) {
+      const r = matrizFL[i];
+      if (!r) continue;
+      const ng = r[0]; // A = Numero guia
+      if (!ng) continue;
+      const key = String(ng).trim();
+      // Si la misma guía tiene varias filas (varios items), acumulamos cantidad
+      if (!mapFL[key]) {
+        mapFL[key] = {
+          cliente: r[6] || null,         // G = Nombre contacto
+          cantidad: toNum(r[3])          // D = Cantidad
+        };
+      } else {
+        mapFL[key].cantidad += toNum(r[3]);
+      }
     }
-    out.detalle = rows.filter(r => r['Numero guia'] || r['Número guía'] || r['N° guia'] || r['Nro. Guia']).map(r => {
-      // Tolerar variaciones en nombres de columnas comunes
-      const numeroGuia = r['Numero guia'] || r['Número guía'] || r['N° guia'] || r['Nro. Guia'] || null;
-      const vehiculo = r['Vehiculo'] || r['Vehículo'] || r['Patente'] || null;
-      const direccion = r['Dirección'] || r['Direccion'] || null;
-      const cantidad = r['Cantidad'] !== undefined ? r['Cantidad'] : r['Cant'];
+  }
+
+  if (sDP) {
+    // Detalle del plan — lectura por POSICIÓN
+    const matriz = XLSX.utils.sheet_to_json(sDP, { header: 1, defval: null, blankrows: false });
+    for (let i = 1; i < matriz.length; i++) {
+      const row = matriz[i];
+      if (!row) continue;
+      const idGuia = row[9];           // J = ID guia
+      if (!idGuia) continue;
+      const idVeh = row[1];             // B = ID vehiculo
+      const direccion = row[4];         // E = Dirección
+      const mt3Guia = row[7];           // H = Capacidad uno
+      const cruce = mapFL[String(idGuia).trim()] || {};
+      out.detalle.push({
+        operacion: 'Canon', region: region, ceco: ceco, fecha: fechaDef,
+        patente: idVeh ? String(idVeh).trim().toUpperCase() : null,
+        numero_guia: idGuia,
+        cantidad: cruce.cantidad || 1,
+        mt3_guia: toNum(mt3Guia),
+        geocerca: null,
+        tipo_ruta: null,
+        comuna: _comunaDeDireccion(direccion),
+        cliente: cruce.cliente,
+        direccion: direccion,
+      });
+    }
+  } else if (sFL) {
+    // Fallback al formato anterior: solo "Formato por defecto lastmile"
+    const rows = getRowsWithHeader(sFL, 0);
+    out.detalle = rows.filter(r => r['Numero guia']).map(r => {
       const comunaExpl = r['Comuna'];
-      const comunaDir = !comunaExpl ? _comunaDeDireccion(direccion) : null;
-      const cliente = r['Nombre de contacto'] || r['Cliente'] || r['Contacto'] || null;
+      const comunaDir = !comunaExpl ? _comunaDeDireccion(r['Dirección'] || r['Direccion']) : null;
       return {
         operacion: 'Canon', region: region, ceco: ceco, fecha: fechaDef,
-        patente: vehiculo ? String(vehiculo).trim().toUpperCase() : null,
-        numero_guia: numeroGuia, cantidad: toNum(cantidad),
-        geocerca: r['Geocerca'], tipo_ruta: r['tipo de ruta'] || r['Tipo de ruta'],
+        patente: r['Vehiculo'] ? String(r['Vehiculo']).trim().toUpperCase() : null,
+        numero_guia: r['Numero guia'], cantidad: toNum(r['Cantidad']),
+        geocerca: r['Geocerca'], tipo_ruta: r['tipo de ruta'],
         comuna: comunaExpl || comunaDir || r['Geocerca'],
-        cliente: cliente,
-        direccion: direccion,
+        cliente: r['Nombre contacto'] || r['Nombre de contacto'] || null,
+        direccion: r['Dirección'] || r['Direccion'] || null,
       };
     });
   }
@@ -14744,15 +14784,22 @@ function actualizarMaestro(wb) {
     const rows = getRowsWithHeader(sDC, 0);
     STATE.demanda_cliente = rows
       .filter(r => r['Desde'] && r['Hasta'] && r['Nodo'])
-      .map(r => ({
-        desde: excelDateToISO(r['Desde']),
-        hasta: excelDateToISO(r['Hasta']),
-        operacion: String(r['Operación'] || '').trim(),
-        nodo: String(r['Nodo'] || '').trim(),
-        tipo: String(r['Tipo demanda'] || '').trim(),
-        guias_exigidas: toNum(r['Guías exigidas']),
-        mt3_exigidos: toNum(r['m³ exigidos'])
-      }));
+      .map(r => {
+        // Normalizar Operación: aceptar "ROSEN", "Rosen", "CANON", "Canon", etc.
+        const opRaw = String(r['Operación'] || '').trim().toUpperCase();
+        let op = opRaw;
+        if (opRaw.startsWith('ROS')) op = 'Rosen';
+        else if (opRaw.startsWith('CAN')) op = 'Canon';
+        return {
+          desde: excelDateToISO(r['Desde']),
+          hasta: excelDateToISO(r['Hasta']),
+          operacion: op,
+          nodo: String(r['Nodo'] || '').trim(),
+          tipo: String(r['Tipo demanda'] || '').trim(),
+          guias_exigidas: toNum(r['Guías exigidas']),
+          mt3_exigidos: toNum(r['m³ exigidos'])
+        };
+      });
   }
 }
 

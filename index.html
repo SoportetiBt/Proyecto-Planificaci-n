@@ -14575,27 +14575,43 @@ function procesarCanon(workbook, region, ceco, fechaDef, log) {
   } else log('  No se encontró hoja Resumen por vehículo', 'error');
 
   // Detalle (formato por defecto lastmile)
-  const sD = workbook.Sheets['Formato por defecto lastmile'] || workbook.Sheets[workbook.SheetNames.find(s => s.toLowerCase().includes('lastmile'))];
+  // Prioridad de hojas para el detalle: "Detalle del Plan" → "Formato por defecto lastmile" → cualquiera con lastmile
+  let sD = workbook.Sheets['Detalle del Plan'] || workbook.Sheets['Detalle del plan'] || workbook.Sheets['Formato por defecto lastmile'];
+  if (!sD) {
+    const sName = workbook.SheetNames.find(s => {
+      const l = s.toLowerCase();
+      return l.includes('detalle') && l.includes('plan');
+    }) || workbook.SheetNames.find(s => s.toLowerCase().includes('lastmile'));
+    if (sName) sD = workbook.Sheets[sName];
+  }
   if (sD) {
     const rows = getRowsWithHeader(sD, 0);
-    // Extrae la comuna del string de dirección. Formato esperado: "Calle 123, Comuna, Región".
+    // Extrae la comuna del string de dirección leyendo DESDE ATRÁS.
+    // Formato típico: "Calle 123, [Casa N], Comuna, Región" — comuna = penúltima parte.
     function _comunaDeDireccion(dir) {
       if (!dir) return null;
       const parts = String(dir).split(',').map(s => s.trim()).filter(Boolean);
       if (parts.length < 2) return null;
-      return parts[1];
+      // Penúltima (índice -2): si hay 2 partes → primera; si hay 3+ → la segunda desde atrás
+      return parts[parts.length - 2];
     }
-    out.detalle = rows.filter(r => r['Numero guia']).map(r => {
+    out.detalle = rows.filter(r => r['Numero guia'] || r['Número guía'] || r['N° guia'] || r['Nro. Guia']).map(r => {
+      // Tolerar variaciones en nombres de columnas comunes
+      const numeroGuia = r['Numero guia'] || r['Número guía'] || r['N° guia'] || r['Nro. Guia'] || null;
+      const vehiculo = r['Vehiculo'] || r['Vehículo'] || r['Patente'] || null;
+      const direccion = r['Dirección'] || r['Direccion'] || null;
+      const cantidad = r['Cantidad'] !== undefined ? r['Cantidad'] : r['Cant'];
       const comunaExpl = r['Comuna'];
-      const comunaDir = !comunaExpl ? _comunaDeDireccion(r['Dirección'] || r['Direccion']) : null;
+      const comunaDir = !comunaExpl ? _comunaDeDireccion(direccion) : null;
+      const cliente = r['Nombre de contacto'] || r['Cliente'] || r['Contacto'] || null;
       return {
         operacion: 'Canon', region: region, ceco: ceco, fecha: fechaDef,
-        patente: r['Vehiculo'] ? String(r['Vehiculo']).trim().toUpperCase() : null,
-        numero_guia: r['Numero guia'], cantidad: toNum(r['Cantidad']),
-        geocerca: r['Geocerca'], tipo_ruta: r['tipo de ruta'],
+        patente: vehiculo ? String(vehiculo).trim().toUpperCase() : null,
+        numero_guia: numeroGuia, cantidad: toNum(cantidad),
+        geocerca: r['Geocerca'], tipo_ruta: r['tipo de ruta'] || r['Tipo de ruta'],
         comuna: comunaExpl || comunaDir || r['Geocerca'],
-        cliente: r['Nombre de contacto'] || null,
-        direccion: r['Dirección'] || r['Direccion'] || null,
+        cliente: cliente,
+        direccion: direccion,
       };
     });
   }

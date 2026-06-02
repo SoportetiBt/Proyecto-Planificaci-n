@@ -12039,8 +12039,9 @@ let STATE = {
 // Detectar vehículos de Atención a Tienda (última milla: tienda + servicios técnicos)
 function esAtencionTienda(patente) {
   if (!patente) return false;
-  const p = String(patente).toUpperCase().trim();
-  return p.includes('TIENDA') || p.includes('SSTT');
+  // Cualquier patente NO alfanumérica real (sin dígitos, palabras como BAJADA, TIENDA, SSTT, etc.)
+  // se considera "atención a tienda" y se mapea al nodo virtual ATN_TIENDA.
+  return !esPatenteReal(patente);
 }
 // Reasignar el ceco al nodo virtual si la patente es atención a tienda
 function getCecoEfectivo(patente, cecoOriginal) {

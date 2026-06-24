@@ -14622,16 +14622,23 @@ function procesarCanon(workbook, region, ceco, fechaDef, log) {
   }
 
   if (sDP) {
-    // Detalle del plan — lectura por POSICIÓN
+    // Detalle del plan — lectura por NOMBRE de columna (el export de driv.in cambia el orden/posición de las columnas;
+    // antes ID guía estaba en J(9) y Capacidad uno en H(7), ahora se corrieron. Leer por header lo hace robusto.)
     const matriz = XLSX.utils.sheet_to_json(sDP, { header: 1, defval: null, blankrows: false });
+    const Hdp = (matriz[0] || []).map(h => (h == null ? '' : String(h).trim().toLowerCase()));
+    const colDP = (def, ...names) => { for (const n of names) { const j = Hdp.indexOf(n.toLowerCase()); if (j >= 0) return j; } return def; };
+    const cGuia = colDP(9, 'id guia', 'id guía', 'numero guia', 'número guía', 'n° guia', 'n° guía');
+    const cVeh  = colDP(1, 'id vehiculo', 'id vehículo', 'vehiculo', 'vehículo', 'patente');
+    const cDir  = colDP(4, 'dirección', 'direccion');
+    const cM3   = colDP(7, 'capacidad uno');
     for (let i = 1; i < matriz.length; i++) {
       const row = matriz[i];
       if (!row) continue;
-      const idGuia = row[9];           // J = ID guia
+      const idGuia = row[cGuia];        // ID guia (por nombre de columna)
       if (!idGuia) continue;
-      const idVeh = row[1];             // B = ID vehiculo
-      const direccion = row[4];         // E = Dirección
-      const mt3Guia = row[7];           // H = Capacidad uno
+      const idVeh = row[cVeh];           // ID vehiculo
+      const direccion = row[cDir];       // Dirección
+      const mt3Guia = row[cM3];          // Capacidad uno (m³)
       const cruce = mapFL[String(idGuia).trim()] || {};
       out.detalle.push({
         operacion: 'Canon', region: region, ceco: ceco, fecha: fechaDef,

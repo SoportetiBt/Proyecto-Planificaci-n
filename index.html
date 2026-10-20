@@ -12217,6 +12217,7 @@ const SUPABASE_KEY = 'sb_publishable_SI6kt_9ioxvIg3VaZOqXdA_zrIry6pR';
 const SESSION_LS_KEY = 'portal.supabase.session';
 
 let SUPABASE_SESSION = null;
+let SNAPSHOT_LOAD_OK = false; // true solo si la lectura del servidor funcionó; si no, se bloquea todo guardado
 
 function loadSavedSession() {
   try {
@@ -12278,22 +12279,38 @@ async function loadSnapshot() {
     });
     if (!r.ok) {
       console.error('loadSnapshot HTTP', r.status, await r.text());
+      SNAPSHOT_LOAD_OK = false;
       return null;
     }
     const rows = await r.json();
+    SNAPSHOT_LOAD_OK = true;
     if (!rows.length) return null;
     const data = rows[0].data || {};
     if (!data || !data.planificacion_diaria) return null;
     return data;
   } catch (e) {
     console.error('loadSnapshot error', e);
+    SNAPSHOT_LOAD_OK = false;
     return null;
   }
+}
+
+function mostrarAvisoLecturaFallida() {
+  if (document.getElementById('avisoLectura')) return;
+  const d = document.createElement('div');
+  d.id = 'avisoLectura';
+  d.style.cssText = 'position:sticky;top:0;z-index:9999;background:#b91c1c;color:#fff;padding:12px 16px;font-weight:600;text-align:center';
+  d.textContent = '⚠️ No se pudo leer la base del servidor. Lo que ves NO son los datos reales y el guardado está BLOQUEADO para no borrar la base. Recarga la página en unos minutos.';
+  document.body.prepend(d);
 }
 
 async function saveSnapshot(data) {
   if (!isAuthenticated()) {
     throw new Error('Necesitas iniciar sesión para guardar cambios.');
+  }
+  if (!SNAPSHOT_LOAD_OK) {
+    mostrarAvisoLecturaFallida();
+    throw new Error('No se guardó: el portal no logró leer la base al abrir, y guardar ahora borraría el histórico. Recarga la página.');
   }
   const r = await fetch(`${SUPABASE_URL}/rest/v1/portal_snapshot?id=eq.1`, {
     method: 'PATCH',
@@ -12315,6 +12332,10 @@ async function saveSnapshot(data) {
 async function clearSnapshot() {
   if (!isAuthenticated()) {
     throw new Error('Necesitas iniciar sesión para borrar datos.');
+  }
+  if (!SNAPSHOT_LOAD_OK) {
+    mostrarAvisoLecturaFallida();
+    throw new Error('Bloqueado: el portal no logró leer la base al abrir. Recarga la página.');
   }
   const r = await fetch(`${SUPABASE_URL}/rest/v1/portal_snapshot?id=eq.1`, {
     method: 'PATCH',
@@ -14925,12 +14946,15 @@ async function init() {
   try {
     const saved = await loadSnapshot();
     STATE = saved || cargarDataInicial();
+    if (!SNAPSHOT_LOAD_OK) mostrarAvisoLecturaFallida();
     // Migrar estructura antigua si falta canon_v_*
     if (!STATE.planificacion_diaria.canon_v_vehiculos) STATE.planificacion_diaria.canon_v_vehiculos = [];
     if (!STATE.planificacion_diaria.canon_v_detalle) STATE.planificacion_diaria.canon_v_detalle = [];
   } catch (e) {
     console.error('Error cargando snapshot', e);
+    SNAPSHOT_LOAD_OK = false;
     STATE = cargarDataInicial();
+    mostrarAvisoLecturaFallida();
   }
   rellenarFechaSelect(STATE);
   renderAll();
